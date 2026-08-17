@@ -7,7 +7,8 @@
   - [REPL](getting-started/repl.md)
 
 - [Language](language/overview.md)
-  - [Bindings and types](language/bindings-and-types.md)
+- [Bindings and types](language/bindings-and-types.md)
+- [User-defined types](language/user-defined-types.md)
   - [Blocks, yield, and return](language/blocks-yield-and-return.md)
   - [Functions and calls](language/functions.md)
   - [Modules and imports](language/modules.md)

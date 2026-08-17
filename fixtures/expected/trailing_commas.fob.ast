@@ -20,16 +20,20 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "y",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },

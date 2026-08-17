@@ -4,8 +4,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "BASE",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Int(
@@ -42,8 +44,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "DOUBLE",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Binary {
@@ -114,8 +118,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "LABEL",
-                type_annotation: Named(
-                    "String",
+                type_annotation: Path(
+                    [
+                        "String",
+                    ],
                 ),
                 value: Expr {
                     kind: If {
@@ -243,15 +249,19 @@ Program {
                     Parameter {
                         name: "value",
                         t: Explicit(
-                            Named(
-                                "Int",
+                            Path(
+                                [
+                                    "Int",
+                                ],
                             ),
                         ),
                     },
                 ],
                 return_type: Explicit(
-                    Named(
-                        "Int",
+                    Path(
+                        [
+                            "Int",
+                        ],
                     ),
                 ),
                 body: Block {

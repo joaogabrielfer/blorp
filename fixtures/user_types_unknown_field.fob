@@ -1,0 +1,8 @@
+type Point: struct =
+    x: Int
+end
+
+fun main(): () =
+    let point := Point(x = 1)
+    echo(point.y)
+end

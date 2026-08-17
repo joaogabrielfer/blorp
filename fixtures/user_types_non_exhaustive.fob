@@ -1,0 +1,13 @@
+type Message: enum =
+    Quit
+    Text: String
+end
+
+fun main(): () =
+    let message := Message::Quit
+    match message in
+        .Quit =>
+            echo("quit")
+        end
+    end
+end

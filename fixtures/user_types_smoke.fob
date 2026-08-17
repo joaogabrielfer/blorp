@@ -1,0 +1,41 @@
+type Point: struct =
+    x: Int
+    y: Int
+end
+
+type Message: enum =
+    Quit
+    Text: String
+    Move: struct =
+        point: Point
+        relative: Bool
+    end
+end
+
+fun describe(message: Message): String =
+    match message in
+        .Quit =>
+            return "quit"
+        end
+
+        .Text(text) =>
+            return text
+        end
+
+        .Move(payload) =>
+            if payload.relative do
+                return "relative move"
+            end
+
+            return "absolute move"
+        end
+    end
+end
+
+fun main(): () =
+    let message := Message::Move(
+        point = Point(x = 10, y = 20),
+        relative = true,
+    )
+    echo(describe(message))
+end

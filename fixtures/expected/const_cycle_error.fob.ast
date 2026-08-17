@@ -4,8 +4,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "FIRST",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Ident(
@@ -42,8 +44,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "SECOND",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Ident(

@@ -55,6 +55,7 @@ already provide the compile-time value layer those features will consume, but
 they cannot yet declare an array length in a type.
 
 The type checker reports mismatched values, invalid calls, invalid assignments,
-and invalid indexing with source locations. Generic types, structs, enums,
-interfaces, and pattern types are design work; see [types and compile-time
-features](../design/types-and-compile-time.md).
+and invalid indexing with source locations. See [user-defined
+types](user-defined-types.md) for structs, enums, and enum matching. Generic
+types, interfaces, aliases, tags, and general pattern types remain design work;
+see [types and compile-time features](../design/types-and-compile-time.md).

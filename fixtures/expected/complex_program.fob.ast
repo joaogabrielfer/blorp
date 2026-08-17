@@ -31,8 +31,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "BASE",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Path(
@@ -72,8 +74,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "LIMIT",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Binary {
@@ -144,8 +148,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "LABEL",
-                type_annotation: Named(
-                    "String",
+                type_annotation: Path(
+                    [
+                        "String",
+                    ],
                 ),
                 value: Expr {
                     kind: If {
@@ -268,9 +274,18 @@ Program {
             ConstDecl {
                 public: false,
                 name: "SEEDS",
-                type_annotation: Array(
-                    "Int",
-                ),
+                type_annotation: Apply {
+                    constructor: [
+                        "Arr",
+                    ],
+                    arguments: [
+                        Path(
+                            [
+                                "Int",
+                            ],
+                        ),
+                    ],
+                },
                 value: Expr {
                     kind: Array(
                         [
@@ -363,23 +378,29 @@ Program {
                     Parameter {
                         name: "value",
                         t: Explicit(
-                            Named(
-                                "Int",
+                            Path(
+                                [
+                                    "Int",
+                                ],
                             ),
                         ),
                     },
                     Parameter {
                         name: "factor",
                         t: Explicit(
-                            Named(
-                                "Int",
+                            Path(
+                                [
+                                    "Int",
+                                ],
                             ),
                         ),
                     },
                 ],
                 return_type: Explicit(
-                    Named(
-                        "Int",
+                    Path(
+                        [
+                            "Int",
+                        ],
                     ),
                 ),
                 body: Block {
@@ -462,15 +483,19 @@ Program {
                     Parameter {
                         name: "value",
                         t: Explicit(
-                            Named(
-                                "Int",
+                            Path(
+                                [
+                                    "Int",
+                                ],
                             ),
                         ),
                     },
                 ],
                 return_type: Explicit(
-                    Named(
-                        "String",
+                    Path(
+                        [
+                            "String",
+                        ],
                     ),
                 ),
                 body: Block {
@@ -553,15 +578,19 @@ Program {
                     Parameter {
                         name: "value",
                         t: Explicit(
-                            Named(
-                                "String",
+                            Path(
+                                [
+                                    "String",
+                                ],
                             ),
                         ),
                     },
                 ],
                 return_type: Explicit(
-                    Named(
-                        "String",
+                    Path(
+                        [
+                            "String",
+                        ],
                     ),
                 ),
                 body: Block {

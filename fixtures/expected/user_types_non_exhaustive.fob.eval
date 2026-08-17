@@ -1,0 +1,18 @@
+TypeError {
+    kind: NonExhaustiveMatch(
+        "Text",
+    ),
+    span: Span {
+        start: SrcPos {
+            line: 8,
+            col: 5,
+            idx: 106,
+        },
+        end: SrcPos {
+            line: 13,
+            col: 1,
+            idx: 185,
+        },
+    },
+    file_path: "$FIXTURE_PATH",
+}

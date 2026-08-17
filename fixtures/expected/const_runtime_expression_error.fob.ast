@@ -4,8 +4,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "VALUE",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Block(

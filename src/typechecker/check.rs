@@ -1,18 +1,20 @@
 use crate::{
     ast::{
-        BinaryOp, Block, CallArgument, ConstDecl, Expr, ExprKind, FunctionDecl, Item, Program,
-        Stmt, TypeAnnotation, UnaryOp,
+        BinaryOp, Block, CallArgument, ConstDecl, EnumPayloadDecl, Expr, ExprKind, FunctionDecl,
+        Item, Program, Stmt, TypeAnnotation, TypeDecl, TypeDeclKind, UnaryOp,
     },
     errors::{ArgumentError, ArgumentErrorKind, TypeError, TypeErrorKind},
     interpreter::values::{RangeValue, Value, normalize_arguments},
-    module::{ExportedSymbol, ExportedSymbolKind, ModuleInterface, ResolvedImport},
+    module::{ExportedSymbol, ExportedSymbolKind, ExportedType, ModuleInterface, ResolvedImport},
     source::Span,
     typechecker::{
         CheckedModule, CheckedProgram, TypeChecker, TypeResult,
         env::TypeBinding,
         ty::{
-            ParameterType,
+            ConstructorSignature, EnumDefinition, FieldDefinition, ParameterType, StructDefinition,
             Type::{self},
+            TypeDefinition, TypeDefinitionKind, TypeId, VariantDefinition,
+            VariantPayloadDefinition,
         },
     },
 };
@@ -90,10 +92,22 @@ impl TypeChecker {
         self.install_imports(imports)?;
 
         for item in &program.items {
+            if let Item::Type(decl) = item {
+                self.predeclare_type(decl)?;
+            }
+        }
+        for item in &program.items {
+            if let Item::Type(decl) = item {
+                self.resolve_type_decl(decl)?;
+            }
+        }
+        self.install_type_constructors()?;
+
+        for item in &program.items {
             match item {
                 Item::Function(decl) => self.declare_function(decl)?,
                 Item::Const(decl) => self.declare_const(decl)?,
-                Item::Import(_) => {}
+                Item::Import(_) | Item::Type(_) => {}
             }
         }
 
@@ -101,13 +115,14 @@ impl TypeChecker {
             match item {
                 Item::Const(decl) => self.check_const_decl(decl)?,
                 Item::Function(decl) => self.check_function_body(decl)?,
-                Item::Import(_) => {}
+                Item::Import(_) | Item::Type(_) => {}
             }
         }
 
         let constants = self.evaluate_constants(&program)?;
 
         let mut exports = std::collections::HashMap::new();
+        let mut types = std::collections::HashMap::new();
         for item in &program.items {
             match item {
                 Item::Function(decl) if decl.public => {
@@ -124,7 +139,7 @@ impl TypeChecker {
                     );
                 }
                 Item::Const(decl) if decl.public => {
-                    let ty = decl.type_annotation.resolve_type_expr();
+                    let ty = self.resolve_type_expr(&decl.type_annotation, decl.span)?;
                     let value = constants
                         .get(&decl.name)
                         .expect("every checked constant is evaluated")
@@ -137,30 +152,86 @@ impl TypeChecker {
                         },
                     );
                 }
+                Item::Type(decl) if decl.public => {
+                    let id = self.type_id(std::slice::from_ref(&decl.name));
+                    types.insert(decl.name.clone(), ExportedType { id: id.clone() });
+                    let definition = self
+                        .type_definitions
+                        .get(&id)
+                        .expect("predeclared public types are resolved");
+                    match &definition.kind {
+                        TypeDefinitionKind::Struct(structure) => {
+                            exports.insert(
+                                decl.name.clone(),
+                                ExportedSymbol {
+                                    ty: Type::Constructor(ConstructorSignature::Struct {
+                                        type_id: id,
+                                        fields: structure
+                                            .fields
+                                            .iter()
+                                            .map(|field| ParameterType {
+                                                name: field.name.clone(),
+                                                ty: field.ty.clone(),
+                                            })
+                                            .collect(),
+                                    }),
+                                    kind: ExportedSymbolKind::Function,
+                                },
+                            );
+                        }
+                        TypeDefinitionKind::Enum(_) => {
+                            exports.insert(
+                                decl.name.clone(),
+                                ExportedSymbol {
+                                    ty: Type::Any,
+                                    kind: ExportedSymbolKind::Function,
+                                },
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
 
         Ok(CheckedModule {
-            program: CheckedProgram { program },
-            interface: ModuleInterface { exports },
+            program: CheckedProgram {
+                program,
+                type_context: std::rc::Rc::new(self.type_context.clone()),
+            },
+            interface: ModuleInterface {
+                exports,
+                types,
+                type_definitions: self.type_definitions.clone(),
+            },
             constants,
+            type_definitions: self.type_definitions.clone(),
         })
     }
 
     fn install_imports(&mut self, imports: &[ResolvedImport]) -> TypeResult<()> {
         for import in imports {
             let name = import.local_name();
-            if self.env.get_current(name).is_some() {
-                return Err(self.error_at(
-                    import.span(),
-                    TypeErrorKind::NameCollision(name.to_string()),
-                ));
-            }
             match import {
                 ResolvedImport::Module { module, .. } => {
+                    if self.env.get_current(name).is_some() {
+                        return Err(self.error_at(
+                            import.span(),
+                            TypeErrorKind::NameCollision(name.to_string()),
+                        ));
+                    }
                     self.env
                         .define_binding(name.to_string(), TypeBinding::Module(module.clone()));
+                    let interface = self
+                        .module_interfaces
+                        .get(module)
+                        .expect("resolved module imports have an interface");
+                    for (type_name, exported) in &interface.types {
+                        self.type_context.names.insert(
+                            vec![name.to_string(), type_name.clone()],
+                            Type::Nominal(exported.id.clone()),
+                        );
+                    }
                 }
                 ResolvedImport::Member {
                     module,
@@ -171,25 +242,236 @@ impl TypeChecker {
                         .module_interfaces
                         .get(module)
                         .expect("resolved imports must have a dependency interface");
-                    let export = interface.exports.get(export_name).ok_or_else(|| {
-                        self.error_at(
+                    let value_export = interface.exports.get(export_name);
+                    let type_export = interface.types.get(export_name);
+                    if value_export.is_none() && type_export.is_none() {
+                        return Err(self.error_at(
                             import.span(),
                             TypeErrorKind::UnknownModuleExport {
                                 module: module.to_string(),
                                 member: export_name.clone(),
                             },
-                        )
-                    })?;
-                    self.env.define_binding(
-                        name.to_string(),
-                        TypeBinding::ImportedMember {
-                            module: module.clone(),
-                            export_name: export_name.clone(),
-                            ty: export.ty.clone(),
-                            kind: export.kind.clone(),
-                        },
+                        ));
+                    }
+                    if let Some(export) = value_export {
+                        if self.env.get_current(name).is_some() {
+                            return Err(self.error_at(
+                                import.span(),
+                                TypeErrorKind::NameCollision(name.to_string()),
+                            ));
+                        }
+                        self.env.define_binding(
+                            name.to_string(),
+                            TypeBinding::ImportedMember {
+                                ty: Box::new(export.ty.clone()),
+                                kind: Box::new(export.kind.clone()),
+                            },
+                        );
+                    }
+                    if let Some(export) = type_export {
+                        if self
+                            .type_context
+                            .names
+                            .contains_key(&vec![name.to_string()])
+                        {
+                            return Err(self.error_at(
+                                import.span(),
+                                TypeErrorKind::TypeNameCollision(name.to_string()),
+                            ));
+                        }
+                        let ty = Type::Nominal(export.id.clone());
+                        self.type_context
+                            .names
+                            .insert(vec![name.to_string()], ty.clone());
+                        self.env.define_type(name.to_string(), ty);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn type_id(&self, path: &[String]) -> TypeId {
+        TypeId {
+            module: self.module_id.clone(),
+            path: path.to_vec(),
+        }
+    }
+
+    fn predeclare_type(&mut self, decl: &TypeDecl) -> TypeResult<()> {
+        if self
+            .type_context
+            .names
+            .contains_key(&vec![decl.name.clone()])
+            || self.env.get_current_type(&decl.name).is_some()
+        {
+            return Err(self.error_at(
+                decl.span,
+                TypeErrorKind::TypeNameCollision(decl.name.clone()),
+            ));
+        }
+        let id = self.type_id(std::slice::from_ref(&decl.name));
+        self.type_context
+            .names
+            .insert(vec![decl.name.clone()], Type::Nominal(id.clone()));
+        self.env
+            .define_type(decl.name.clone(), Type::Nominal(id.clone()));
+        let kind = match decl.kind {
+            TypeDeclKind::Struct(_) => {
+                TypeDefinitionKind::Struct(StructDefinition { fields: vec![] })
+            }
+            TypeDeclKind::Enum(_) => TypeDefinitionKind::Enum(EnumDefinition { variants: vec![] }),
+        };
+        self.type_definitions.insert(
+            id.clone(),
+            TypeDefinition {
+                id,
+                public: decl.public,
+                kind,
+            },
+        );
+        Ok(())
+    }
+
+    fn resolve_type_decl(&mut self, decl: &TypeDecl) -> TypeResult<()> {
+        let id = self.type_id(std::slice::from_ref(&decl.name));
+        let kind = match &decl.kind {
+            TypeDeclKind::Struct(structure) => TypeDefinitionKind::Struct(StructDefinition {
+                fields: self.resolve_struct_fields(&structure.fields)?,
+            }),
+            TypeDeclKind::Enum(enumeration) => {
+                if enumeration.variants.is_empty() {
+                    return Err(
+                        self.error_at(decl.span, TypeErrorKind::EmptyEnum(decl.name.clone()))
                     );
                 }
+                for variant in &enumeration.variants {
+                    if let Some(EnumPayloadDecl::InlineStruct(_)) = &variant.payload {
+                        let payload_id = self.type_id(&[decl.name.clone(), variant.name.clone()]);
+                        self.type_context.names.insert(
+                            vec![decl.name.clone(), variant.name.clone()],
+                            Type::Nominal(payload_id.clone()),
+                        );
+                        self.type_definitions.insert(
+                            payload_id.clone(),
+                            TypeDefinition {
+                                id: payload_id,
+                                public: decl.public,
+                                kind: TypeDefinitionKind::Struct(StructDefinition {
+                                    fields: vec![],
+                                }),
+                            },
+                        );
+                    }
+                }
+                let mut variants = Vec::new();
+                let mut names = std::collections::HashSet::new();
+                for (index, variant) in enumeration.variants.iter().enumerate() {
+                    if !names.insert(variant.name.clone()) {
+                        return Err(self.error_at(
+                            variant.span,
+                            TypeErrorKind::DuplicateVariant(variant.name.clone()),
+                        ));
+                    }
+                    let payload = match &variant.payload {
+                        None => VariantPayloadDefinition::Unit,
+                        Some(EnumPayloadDecl::Type(ty)) => VariantPayloadDefinition::Value(
+                            self.resolve_type_expr(ty, variant.span)?,
+                        ),
+                        Some(EnumPayloadDecl::InlineStruct(structure)) => {
+                            let payload_id =
+                                self.type_id(&[decl.name.clone(), variant.name.clone()]);
+                            let definition = TypeDefinition {
+                                id: payload_id.clone(),
+                                public: decl.public,
+                                kind: TypeDefinitionKind::Struct(StructDefinition {
+                                    fields: self.resolve_struct_fields(&structure.fields)?,
+                                }),
+                            };
+                            self.type_definitions.insert(payload_id.clone(), definition);
+                            VariantPayloadDefinition::InlineStruct(payload_id)
+                        }
+                    };
+                    variants.push(VariantDefinition {
+                        name: variant.name.clone(),
+                        payload,
+                        index,
+                        span: variant.span,
+                    });
+                }
+                TypeDefinitionKind::Enum(EnumDefinition { variants })
+            }
+        };
+        self.type_definitions.insert(
+            id.clone(),
+            TypeDefinition {
+                id,
+                public: decl.public,
+                kind,
+            },
+        );
+        Ok(())
+    }
+
+    fn resolve_struct_fields(
+        &self,
+        fields: &[crate::ast::StructFieldDecl],
+    ) -> TypeResult<Vec<FieldDefinition>> {
+        let mut names = std::collections::HashSet::new();
+        fields
+            .iter()
+            .map(|field| {
+                if !names.insert(field.name.clone()) {
+                    return Err(self.error_at(
+                        field.span,
+                        TypeErrorKind::DuplicateField(field.name.clone()),
+                    ));
+                }
+                Ok(FieldDefinition {
+                    name: field.name.clone(),
+                    ty: self.resolve_type_expr(&field.ty, field.span)?,
+                    span: field.span,
+                })
+            })
+            .collect()
+    }
+
+    fn resolve_type_expr(&self, expression: &crate::ast::TypeExpr, span: Span) -> TypeResult<Type> {
+        self.type_context
+            .resolve_type_expr(expression)
+            .map_err(|kind| self.error_at(span, kind))
+    }
+
+    fn resolve_type_annotation(&self, annotation: &TypeAnnotation, span: Span) -> TypeResult<Type> {
+        self.type_context
+            .resolve_annotation(annotation)
+            .map_err(|kind| self.error_at(span, kind))
+    }
+
+    fn install_type_constructors(&mut self) -> TypeResult<()> {
+        for definition in self.type_definitions.values() {
+            if definition.id.module != self.module_id || definition.id.path.len() != 1 {
+                continue;
+            }
+            let name = definition.id.path[0].clone();
+            match &definition.kind {
+                TypeDefinitionKind::Struct(structure) => {
+                    self.env.define(
+                        name,
+                        Type::Constructor(ConstructorSignature::Struct {
+                            type_id: definition.id.clone(),
+                            fields: structure
+                                .fields
+                                .iter()
+                                .map(|field| ParameterType {
+                                    name: field.name.clone(),
+                                    ty: field.ty.clone(),
+                                })
+                                .collect(),
+                        }),
+                    );
+                }
+                TypeDefinitionKind::Enum(_) => {}
             }
         }
         Ok(())
@@ -236,7 +518,7 @@ impl TypeChecker {
                         Ok(StmtCheck::normal(Type::Unit))
                     }
                     TypeAnnotation::Explicit(bind_type) => {
-                        let bind_type = bind_type.resolve_type_expr();
+                        let bind_type = self.resolve_type_expr(bind_type, stmt.span())?;
                         if TypeChecker::types_compatible(&bind_type, &value_type) {
                             self.env.define(name.clone(), bind_type);
                             Ok(StmtCheck::normal(Type::Unit))
@@ -286,6 +568,10 @@ impl TypeChecker {
                         TypeErrorKind::ModuleMemberAssignment(segments.join("::")),
                     )),
 
+                    ExprKind::Field { .. } => {
+                        Err(self.error_at(target.span, TypeErrorKind::FieldAssignmentUnsupported))
+                    }
+
                     _ => Err(self.error_at(
                         target.span,
                         TypeErrorKind::InvalidAssignmentTarget(target.kind.to_string()),
@@ -304,15 +590,17 @@ impl TypeChecker {
         if self.env.get_current(&decl.name).is_some() {
             return Err(self.error_at(decl.span, TypeErrorKind::NameCollision(decl.name.clone())));
         }
-        self.env
-            .define_const(decl.name.clone(), decl.type_annotation.resolve_type_expr());
+        self.env.define_const(
+            decl.name.clone(),
+            self.resolve_type_expr(&decl.type_annotation, decl.span)?,
+        );
         Ok(())
     }
 
     fn check_const_decl(&mut self, decl: &ConstDecl) -> TypeResult<()> {
         self.validate_const_expr(&decl.value)?;
         let found = self.infer_expr(&decl.value)?;
-        let expected = decl.type_annotation.resolve_type_expr();
+        let expected = self.resolve_type_expr(&decl.type_annotation, decl.span)?;
         if TypeChecker::types_compatible(&expected, &found) {
             Ok(())
         } else {
@@ -339,10 +627,11 @@ impl TypeChecker {
                 .map_err(|kind| self.error_at(expr.span, kind))?
             {
                 TypeBinding::Const(_) => Ok(()),
-                TypeBinding::ImportedMember {
-                    kind: ExportedSymbolKind::Const { .. },
-                    ..
-                } => Ok(()),
+                TypeBinding::ImportedMember { kind, .. }
+                    if matches!(kind.as_ref(), ExportedSymbolKind::Const { .. }) =>
+                {
+                    Ok(())
+                }
                 _ => Err(self.error_at(expr.span, TypeErrorKind::NotAConstant(name.clone()))),
             },
             ExprKind::Path(segments) => {
@@ -416,7 +705,9 @@ impl TypeChecker {
             | ExprKind::Call { .. }
             | ExprKind::While { .. }
             | ExprKind::For { .. }
-            | ExprKind::Lambda { .. } => Err(self.error_at(
+            | ExprKind::Lambda { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Match { .. } => Err(self.error_at(
                 expr.span,
                 TypeErrorKind::ConstExpressionNotAllowed(expr.kind.to_string()),
             )),
@@ -505,10 +796,13 @@ impl TypeChecker {
                         .get_binding(name)
                         .map_err(|kind| self.error_at(expr.span, kind))?
                     {
-                        TypeBinding::ImportedMember {
-                            kind: ExportedSymbolKind::Const { value },
-                            ..
-                        } => Ok(value),
+                        TypeBinding::ImportedMember { kind, .. } => match *kind {
+                            ExportedSymbolKind::Const { value } => Ok(value),
+                            _ => {
+                                Err(self
+                                    .error_at(expr.span, TypeErrorKind::NotAConstant(name.clone())))
+                            }
+                        },
                         _ => {
                             Err(self.error_at(expr.span, TypeErrorKind::NotAConstant(name.clone())))
                         }
@@ -763,7 +1057,7 @@ impl TypeChecker {
                     .map_err(|kind| self.error_at(span, kind))?;
                 Ok(value)
             }
-            ExprKind::Path(segments) => self.infer_module_path(segments, span),
+            ExprKind::Path(segments) => self.infer_path(segments, span),
             ExprKind::Unit => Ok(Type::Unit),
             ExprKind::Block(block) => self.check_block(block).map(|b| b.ty),
             ExprKind::Tuple(exprs) => {
@@ -865,12 +1159,22 @@ impl TypeChecker {
                 }
             }
             ExprKind::Call { callee, args } => {
+                let callee_type = self.infer_expr(callee)?;
+                if let Type::Constructor(signature) = callee_type {
+                    return self.check_constructor_call(signature, args, callee.span);
+                }
                 let Type::Function {
                     parameter_overloads,
                     return_type,
-                } = self.infer_expr(callee)?
+                } = callee_type
                 else {
-                    panic!("should be a function call")
+                    return Err(self.error_at(
+                        callee.span,
+                        TypeErrorKind::MismatchedType {
+                            expected: "a callable value".to_string(),
+                            found: callee_type.to_string(),
+                        },
+                    ));
                 };
 
                 let argument_types = args
@@ -1079,6 +1383,8 @@ impl TypeChecker {
                 result
             }
             ExprKind::Index { target, index } => self.check_index_assignment(target, index),
+            ExprKind::Field { target, name } => self.infer_field(target, name, span),
+            ExprKind::Match { value, arms } => self.check_match(value, arms, span),
         }
     }
 
@@ -1177,11 +1483,11 @@ impl TypeChecker {
         for param in parameters {
             parameters_types.push(ParameterType {
                 name: param.name.clone(),
-                ty: param.t.resolve_type_annotation(),
+                ty: self.resolve_type_annotation(&param.t, decl.span)?,
             });
         }
 
-        let return_type = Box::new(return_type.resolve_type_annotation());
+        let return_type = Box::new(self.resolve_type_annotation(return_type, decl.span)?);
 
         let fun = match self.env.get_current(name) {
             Some(TypeBinding::Local(Type::Function {
@@ -1217,43 +1523,331 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn infer_module_path(&self, segments: &[String], span: Span) -> TypeResult<Type> {
-        let Some((module_name, member_path)) = segments.split_first() else {
-            unreachable!("paths have at least two segments");
-        };
-        let TypeBinding::Module(module) = self
-            .env
-            .get_binding(module_name)
-            .map_err(|kind| self.error_at(span, kind))?
+    fn definition(&self, id: &TypeId) -> Option<&TypeDefinition> {
+        self.type_definitions.get(id).or_else(|| {
+            self.module_interfaces
+                .get(&id.module)
+                .and_then(|interface| interface.type_definitions.get(id))
+        })
+    }
+
+    fn constructor_for_variant(
+        &self,
+        enum_id: &TypeId,
+        variant_name: &str,
+        span: Span,
+    ) -> TypeResult<Type> {
+        let Some(TypeDefinition {
+            kind: TypeDefinitionKind::Enum(definition),
+            ..
+        }) = self.definition(enum_id)
         else {
-            return Err(self.error_at(span, TypeErrorKind::NotAValue(module_name.clone())));
+            return Err(self.error_at(span, TypeErrorKind::NotAnEnum(enum_id.to_string())));
         };
-        let [member] = member_path else {
+        let variant = definition
+            .variants
+            .iter()
+            .find(|variant| variant.name == variant_name)
+            .ok_or_else(|| {
+                self.error_at(
+                    span,
+                    TypeErrorKind::UnknownVariant {
+                        ty: enum_id.to_string(),
+                        variant: variant_name.to_string(),
+                    },
+                )
+            })?;
+        match &variant.payload {
+            VariantPayloadDefinition::Unit => Ok(Type::Nominal(enum_id.clone())),
+            VariantPayloadDefinition::Value(ty) => {
+                Ok(Type::Constructor(ConstructorSignature::EnumVariant {
+                    enum_id: enum_id.clone(),
+                    variant_index: variant.index,
+                    parameters: vec![ParameterType {
+                        name: "value".to_string(),
+                        ty: ty.clone(),
+                    }],
+                    named_only: false,
+                }))
+            }
+            VariantPayloadDefinition::InlineStruct(payload_id) => {
+                let Some(TypeDefinition {
+                    kind: TypeDefinitionKind::Struct(structure),
+                    ..
+                }) = self.definition(payload_id)
+                else {
+                    unreachable!("inline payload IDs always refer to structs");
+                };
+                Ok(Type::Constructor(ConstructorSignature::EnumVariant {
+                    enum_id: enum_id.clone(),
+                    variant_index: variant.index,
+                    parameters: structure
+                        .fields
+                        .iter()
+                        .map(|field| ParameterType {
+                            name: field.name.clone(),
+                            ty: field.ty.clone(),
+                        })
+                        .collect(),
+                    named_only: true,
+                }))
+            }
+        }
+    }
+
+    fn infer_path(&self, segments: &[String], span: Span) -> TypeResult<Type> {
+        let (head, tail) = segments.split_first().expect("paths have a head");
+        if let Ok(TypeBinding::Module(module)) = self.env.get_binding(head) {
+            let interface = self
+                .module_interfaces
+                .get(&module)
+                .expect("module namespace bindings must refer to a dependency interface");
+            if let [member] = tail
+                && let Some(symbol) = interface.exports.get(member)
+            {
+                return Ok(symbol.ty.clone());
+            }
+            if let [type_name, variant] = tail
+                && let Some(exported) = interface.types.get(type_name)
+            {
+                return self.constructor_for_variant(&exported.id, variant, span);
+            }
             return Err(self.error_at(
                 span,
                 TypeErrorKind::UnknownModuleExport {
                     module: module.to_string(),
-                    member: member_path.join("::"),
+                    member: tail.join("::"),
+                },
+            ));
+        }
+
+        let enum_ty = self
+            .type_context
+            .names
+            .get(&vec![head.clone()])
+            .cloned()
+            .ok_or_else(|| self.error_at(span, TypeErrorKind::NotAValue(head.clone())))?;
+        let Type::Nominal(enum_id) = enum_ty else {
+            return Err(self.error_at(span, TypeErrorKind::NotAValue(head.clone())));
+        };
+        let [variant] = tail else {
+            return Err(self.error_at(
+                span,
+                TypeErrorKind::UnknownVariant {
+                    ty: enum_id.to_string(),
+                    variant: tail.join("::"),
                 },
             ));
         };
-        let interface = self
-            .module_interfaces
-            .get(&module)
-            .expect("module namespace bindings must refer to a dependency interface");
-        interface
-            .exports
-            .get(member)
-            .map(|symbol| symbol.ty.clone())
+        self.constructor_for_variant(&enum_id, variant, span)
+    }
+
+    fn check_constructor_call(
+        &mut self,
+        signature: ConstructorSignature,
+        arguments: &[CallArgument<Expr>],
+        span: Span,
+    ) -> TypeResult<Type> {
+        let (parameters, result, named_only) = match signature {
+            ConstructorSignature::Struct { type_id, fields } => {
+                (fields, Type::Nominal(type_id), true)
+            }
+            ConstructorSignature::EnumVariant {
+                enum_id,
+                parameters,
+                named_only,
+                ..
+            } => (parameters, Type::Nominal(enum_id), named_only),
+        };
+        if named_only && arguments.iter().any(|argument| argument.name.is_none()) {
+            return Err(self.error_at(
+                span,
+                TypeErrorKind::ArgumentError {
+                    e: Box::new(ArgumentError {
+                        kind: ArgumentErrorKind::NamedOnly,
+                        span: None,
+                    }),
+                },
+            ));
+        }
+        let argument_types = arguments
+            .iter()
+            .map(|argument| {
+                Ok(CallArgument {
+                    name: argument.name.clone(),
+                    value: self.infer_expr(&argument.value)?,
+                    span: argument.span,
+                })
+            })
+            .collect::<TypeResult<Vec<_>>>()?;
+        let normalized = normalize_arguments(&parameters, &argument_types)
+            .map_err(|error| self.error_at(span, TypeErrorKind::ArgumentError { e: error }))?;
+        for (parameter, found) in parameters.iter().zip(normalized) {
+            if !TypeChecker::types_compatible(&parameter.ty, &found) {
+                return Err(self.error_at(
+                    span,
+                    TypeErrorKind::MismatchedType {
+                        expected: parameter.ty.to_string(),
+                        found: found.to_string(),
+                    },
+                ));
+            }
+        }
+        Ok(result)
+    }
+
+    fn infer_field(&mut self, target: &Expr, name: &str, span: Span) -> TypeResult<Type> {
+        let target_ty = self.infer_expr(target)?;
+        let Type::Nominal(id) = target_ty else {
+            return Err(self.error_at(span, TypeErrorKind::NotAStruct(target_ty.to_string())));
+        };
+        let Some(TypeDefinition {
+            kind: TypeDefinitionKind::Struct(definition),
+            ..
+        }) = self.definition(&id)
+        else {
+            return Err(self.error_at(span, TypeErrorKind::NotAStruct(id.to_string())));
+        };
+        definition
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .map(|field| field.ty.clone())
             .ok_or_else(|| {
                 self.error_at(
                     span,
-                    TypeErrorKind::UnknownModuleExport {
-                        module: module.to_string(),
-                        member: member.clone(),
+                    TypeErrorKind::UnknownField {
+                        ty: id.to_string(),
+                        field: name.to_string(),
                     },
                 )
             })
+    }
+
+    fn check_match(
+        &mut self,
+        value: &Expr,
+        arms: &[crate::ast::MatchArm],
+        span: Span,
+    ) -> TypeResult<Type> {
+        let value_ty = self.infer_expr(value)?;
+        let Type::Nominal(enum_id) = value_ty else {
+            return Err(self.error_at(span, TypeErrorKind::NotAnEnum(value_ty.to_string())));
+        };
+        let Some(TypeDefinition {
+            kind: TypeDefinitionKind::Enum(definition),
+            ..
+        }) = self.definition(&enum_id)
+        else {
+            return Err(self.error_at(span, TypeErrorKind::NotAnEnum(enum_id.to_string())));
+        };
+        let variants = definition.variants.clone();
+        let mut seen = std::collections::HashSet::new();
+        let mut wildcard = false;
+        let mut yielded = None;
+        for arm in arms {
+            if wildcard {
+                return Err(self.error_at(arm.span, TypeErrorKind::UnreachableMatchArm));
+            }
+            self.env.push_scope();
+            match &arm.pattern {
+                crate::ast::Pattern::Wildcard { .. } => wildcard = true,
+                crate::ast::Pattern::EnumVariant {
+                    qualifier,
+                    variant,
+                    binding,
+                    ..
+                } => {
+                    if let Some(qualifier) = qualifier {
+                        let expected = qualifier.join("::");
+                        if self.type_context.names.get(qualifier)
+                            != Some(&Type::Nominal(enum_id.clone()))
+                        {
+                            self.env.pop_scope();
+                            return Err(self.error_at(arm.span, TypeErrorKind::NotAnEnum(expected)));
+                        }
+                    }
+                    let variant_definition = variants
+                        .iter()
+                        .find(|item| item.name == *variant)
+                        .ok_or_else(|| {
+                            self.error_at(
+                                arm.span,
+                                TypeErrorKind::UnknownVariant {
+                                    ty: enum_id.to_string(),
+                                    variant: variant.clone(),
+                                },
+                            )
+                        })?;
+                    if !seen.insert(variant.clone()) {
+                        self.env.pop_scope();
+                        return Err(self.error_at(
+                            arm.span,
+                            TypeErrorKind::DuplicateMatchArm(variant.clone()),
+                        ));
+                    }
+                    match (&variant_definition.payload, binding) {
+                        (VariantPayloadDefinition::Unit, Some(_)) => {
+                            self.env.pop_scope();
+                            return Err(self.error_at(
+                                arm.span,
+                                TypeErrorKind::VariantHasNoPayload {
+                                    ty: enum_id.to_string(),
+                                    variant: variant.clone(),
+                                },
+                            ));
+                        }
+                        (VariantPayloadDefinition::Unit, None) => {}
+                        (VariantPayloadDefinition::Value(ty), Some(name)) => {
+                            self.env.define(name.clone(), ty.clone())
+                        }
+                        (VariantPayloadDefinition::InlineStruct(id), Some(name)) => {
+                            self.env.define(name.clone(), Type::Nominal(id.clone()))
+                        }
+                        (_, None) => {
+                            self.env.pop_scope();
+                            return Err(self.error_at(
+                                arm.span,
+                                TypeErrorKind::VariantRequiresPayload {
+                                    ty: enum_id.to_string(),
+                                    variant: variant.clone(),
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+            let check = self.check_block(&arm.body)?;
+            self.env.pop_scope();
+            if let Some(ty) = check.ty.ne(&Type::Unit).then_some(check.ty) {
+                if let Some(existing) = &yielded {
+                    if !TypeChecker::types_compatible(existing, &ty) {
+                        return Err(self.error_at(
+                            arm.span,
+                            TypeErrorKind::MismatchedBranchTypes {
+                                expected: existing.to_string(),
+                                found: ty.to_string(),
+                            },
+                        ));
+                    }
+                } else {
+                    yielded = Some(ty);
+                }
+            }
+        }
+        if !wildcard {
+            let missing = variants
+                .iter()
+                .filter(|variant| !seen.contains(&variant.name))
+                .map(|variant| variant.name.as_str())
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(
+                    self.error_at(span, TypeErrorKind::NonExhaustiveMatch(missing.join(", ")))
+                );
+            }
+        }
+        Ok(yielded.unwrap_or(Type::Unit))
     }
 
     fn check_function_body(&mut self, decl: &FunctionDecl) -> TypeResult<()> {
@@ -1264,14 +1858,14 @@ impl TypeChecker {
             ..
         } = decl;
 
-        let expected_return = return_type.resolve_type_annotation();
+        let expected_return = self.resolve_type_annotation(return_type, decl.span)?;
         let previous_return = self.current_function_return.clone();
         self.current_function_return = Some(expected_return.clone());
 
         self.env.push_scope();
 
         for param in parameters {
-            let param_type = param.t.resolve_type_annotation();
+            let param_type = self.resolve_type_annotation(&param.t, decl.span)?;
             self.env.define(param.name.clone(), param_type);
         }
 

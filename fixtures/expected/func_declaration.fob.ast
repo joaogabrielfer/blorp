@@ -20,23 +20,29 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "y",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -117,8 +123,10 @@ Program {
                                 generics: [],
                                 parameters: [],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -167,15 +175,19 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -222,8 +234,10 @@ Program {
                                 generics: [],
                                 parameters: [],
                                 return_type: Explicit(
-                                    Named(
-                                        "String",
+                                    Path(
+                                        [
+                                            "String",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -316,8 +330,10 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },

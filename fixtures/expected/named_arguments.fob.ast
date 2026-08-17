@@ -20,23 +20,29 @@ Program {
                                     Parameter {
                                         name: "lhs",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "rhs",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -119,31 +125,39 @@ Program {
                                     Parameter {
                                         name: "name",
                                         t: Explicit(
-                                            Named(
-                                                "String",
+                                            Path(
+                                                [
+                                                    "String",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "age",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "active",
                                         t: Explicit(
-                                            Named(
-                                                "Bool",
+                                            Path(
+                                                [
+                                                    "Bool",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "String",
+                                    Path(
+                                        [
+                                            "String",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -328,23 +342,29 @@ Program {
                                     Parameter {
                                         name: "address",
                                         t: Explicit(
-                                            Named(
-                                                "String",
+                                            Path(
+                                                [
+                                                    "String",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "timeout",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "String",
+                                    Path(
+                                        [
+                                            "String",
+                                        ],
                                     ),
                                 ),
                                 body: Block {

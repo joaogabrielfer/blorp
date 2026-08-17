@@ -1,4 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use anyhow::Result;
 
@@ -6,6 +10,7 @@ use crate::{
     errors::{RuntimeError, RuntimeErrorKind},
     interpreter::env::Env,
     source::Span,
+    typechecker::ty::{TypeContext, TypeDefinition, TypeId},
 };
 
 pub mod builtins;
@@ -17,6 +22,8 @@ pub struct Interpreter<W: std::io::Write> {
     env: Env,
     file_path: PathBuf,
     output: W,
+    pub(crate) type_context: Rc<TypeContext>,
+    pub(crate) type_definitions: HashMap<TypeId, TypeDefinition>,
 }
 
 impl<W: std::io::Write> Interpreter<W> {
@@ -27,6 +34,8 @@ impl<W: std::io::Write> Interpreter<W> {
             env,
             file_path: file_path.to_path_buf(),
             output,
+            type_context: Rc::new(TypeContext::with_primitives()),
+            type_definitions: HashMap::new(),
         }
     }
     pub fn new_with_env(file_path: &Path, env: Env, output: W) -> Self {
@@ -34,6 +43,8 @@ impl<W: std::io::Write> Interpreter<W> {
             env,
             file_path: file_path.to_path_buf(),
             output,
+            type_context: Rc::new(TypeContext::with_primitives()),
+            type_definitions: HashMap::new(),
         }
     }
     fn _write_output(&mut self, value: impl std::fmt::Display) -> Result<(), Box<RuntimeError>> {
@@ -56,6 +67,15 @@ impl<W: std::io::Write> Interpreter<W> {
     pub(crate) fn restore_context(&mut self, env: Env, file_path: PathBuf) {
         self.env = env;
         self.file_path = file_path;
+    }
+
+    pub(crate) fn install_type_metadata(
+        &mut self,
+        type_context: Rc<TypeContext>,
+        definitions: &HashMap<TypeId, TypeDefinition>,
+    ) {
+        self.type_context = type_context;
+        self.type_definitions.extend(definitions.clone());
     }
 }
 

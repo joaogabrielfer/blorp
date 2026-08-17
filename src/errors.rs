@@ -190,7 +190,7 @@ pub enum ParserErrorKind {
     InvalidImport { found: String },
     #[error("{found} is not a valid part of a module path")]
     InvalidModulePath { found: String },
-    #[error("expected a top-level item (`import`, `const`, or `fun`), found '{found}'")]
+    #[error("expected a top-level item (`import`, `type`, `const`, or `fun`), found '{found}'")]
     ExpectedTopLevelItem { found: String },
     #[error("constant declarations require an explicit type")]
     ConstRequiresType,
@@ -225,6 +225,16 @@ impl Display for RuntimeError {
 
 #[derive(Debug, Error)]
 pub enum RuntimeErrorKind {
+    #[error("'{0}' is not a struct value")]
+    NotAStruct(String),
+    #[error("unknown field '{field}' on '{ty}'")]
+    UnknownField { ty: String, field: String },
+    #[error("'{0}' is not an enum value")]
+    NotAnEnum(String),
+    #[error("unknown enum variant '{variant}' on '{ty}'")]
+    UnknownEnumVariant { ty: String, variant: String },
+    #[error("field assignment is not implemented; reconstruct the struct value instead")]
+    FieldAssignmentUnsupported,
     #[error("undefined variable '{0}'")]
     UndefinedVariable(String),
     #[error("cannot assign to immutable variable '{0}'")]
@@ -312,6 +322,38 @@ impl Display for TypeError {
 
 #[derive(Debug, Error)]
 pub enum TypeErrorKind {
+    #[error("unknown type '{0}'")]
+    UnknownType(String),
+    #[error("type application for '{0}' is not supported yet")]
+    UnsupportedTypeApplication(String),
+    #[error("name '{0}' is already defined in the type namespace")]
+    TypeNameCollision(String),
+    #[error("duplicate field '{0}'")]
+    DuplicateField(String),
+    #[error("duplicate enum variant '{0}'")]
+    DuplicateVariant(String),
+    #[error("enum '{0}' must declare at least one variant")]
+    EmptyEnum(String),
+    #[error("'{0}' is not a struct type")]
+    NotAStruct(String),
+    #[error("unknown field '{field}' on '{ty}'")]
+    UnknownField { ty: String, field: String },
+    #[error("field assignment is not implemented; reconstruct the struct value instead")]
+    FieldAssignmentUnsupported,
+    #[error("'{0}' is not an enum type")]
+    NotAnEnum(String),
+    #[error("unknown variant '{variant}' for enum '{ty}'")]
+    UnknownVariant { ty: String, variant: String },
+    #[error("variant '{variant}' for enum '{ty}' has no payload")]
+    VariantHasNoPayload { ty: String, variant: String },
+    #[error("variant '{variant}' for enum '{ty}' requires a payload binding")]
+    VariantRequiresPayload { ty: String, variant: String },
+    #[error("duplicate match arm for variant '{0}'")]
+    DuplicateMatchArm(String),
+    #[error("non-exhaustive match; missing variants: {0}")]
+    NonExhaustiveMatch(String),
+    #[error("match arms after '_' are unreachable")]
+    UnreachableMatchArm,
     #[error("{e}")]
     ArgumentError { e: Box<ArgumentError> },
     #[error("mismatched types, expected '{expected}' but got '{found}'")]
@@ -385,6 +427,9 @@ pub enum ArgumentErrorKind {
 
     #[error("a named argument cannot be followed by a positional one")]
     PositionalAfterNamed,
+
+    #[error("this constructor requires named arguments")]
+    NamedOnly,
 
     #[error("ambiguous function call")]
     Ambiguous,

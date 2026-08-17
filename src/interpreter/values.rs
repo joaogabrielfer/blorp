@@ -6,9 +6,9 @@ use crate::ast::{CallArgument, CallParameter, ValueArgument};
 use crate::errors::{ArgumentError, ArgumentErrorKind};
 use crate::interpreter::builtins::BuiltinFunction;
 use crate::typechecker::TypeChecker;
-use crate::typechecker::ty::Type;
+use crate::typechecker::ty::{ConstructorSignature, Type, TypeContext, TypeId};
 use crate::{
-    ast::{Block, Expr, Parameter, TypeAnnotation},
+    ast::{Block, Expr, Parameter},
     errors::RuntimeErrorKind,
     interpreter::env::EnvRef,
     module::ModuleId,
@@ -29,6 +29,10 @@ pub enum Value {
     Module(Rc<ModuleValue>),
 
     Range(RangeValue),
+    Struct(StructValue),
+    Enum(EnumValue),
+    Constructor(ConstructorRef),
+    EnumNamespace(TypeId),
 }
 
 impl Value {
@@ -56,15 +60,22 @@ impl Value {
                             .iter()
                             .map(|p| crate::typechecker::ty::ParameterType {
                                 name: p.name.clone(),
-                                ty: p.t.resolve_type_annotation(),
+                                ty: function_value
+                                    .type_context
+                                    .resolve_annotation(&p.t)
+                                    .unwrap_or(Type::Any),
                             })
                             .collect()
                     })
                     .collect(),
-                return_type: Box::new(function_value.return_type.resolve_type_annotation()),
+                return_type: Box::new(function_value.return_type.clone()),
             },
             Value::Module(_) => Type::Any,
             Value::Range(_) => Type::Range,
+            Value::Struct(value) => Type::Nominal(value.type_id.clone()),
+            Value::Enum(value) => Type::Nominal(value.type_id.clone()),
+            Value::Constructor(signature) => signature.to_type(),
+            Value::EnumNamespace(_) => Type::Any,
         }
     }
 }
@@ -81,7 +92,51 @@ pub struct RangeValue {
 pub struct FunctionValue {
     pub name: Option<String>,
     pub overload_variants: Vec<OverloadFunctionVariant>,
-    pub return_type: TypeAnnotation,
+    pub return_type: Type,
+    pub type_context: Rc<TypeContext>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructValue {
+    pub type_id: TypeId,
+    pub fields: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumValue {
+    pub type_id: TypeId,
+    pub variant_index: usize,
+    pub variant_name: String,
+    pub payload: Option<Box<Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstructorRef {
+    Struct(TypeId),
+    EnumVariant {
+        enum_id: TypeId,
+        variant_index: usize,
+    },
+}
+
+impl ConstructorRef {
+    pub fn to_type(&self) -> Type {
+        match self {
+            ConstructorRef::Struct(id) => Type::Constructor(ConstructorSignature::Struct {
+                type_id: id.clone(),
+                fields: vec![],
+            }),
+            ConstructorRef::EnumVariant {
+                enum_id,
+                variant_index,
+            } => Type::Constructor(ConstructorSignature::EnumVariant {
+                enum_id: enum_id.clone(),
+                variant_index: *variant_index,
+                parameters: vec![],
+                named_only: false,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,7 +266,11 @@ impl FunctionValue {
             let parameter_types = variant
                 .parameters
                 .iter()
-                .map(|parameter| parameter.t.resolve_type_annotation())
+                .map(|parameter| {
+                    self.type_context
+                        .resolve_annotation(&parameter.t)
+                        .unwrap_or(Type::Any)
+                })
                 .collect_vec();
             let argument_types = normalized.iter().map(Value::get_type).collect_vec();
 
@@ -225,13 +284,22 @@ impl FunctionValue {
                 .iter()
                 .zip(argument_types)
                 .find(|(parameter, found)| {
-                    !TypeChecker::types_compatible(&parameter.t.resolve_type_annotation(), found)
+                    !TypeChecker::types_compatible(
+                        &self
+                            .type_context
+                            .resolve_annotation(&parameter.t)
+                            .unwrap_or(Type::Any),
+                        found,
+                    )
                 })
             {
                 last_error = Some(Box::new(ArgumentError {
                     kind: ArgumentErrorKind::TypeMismatch {
                         parameter: parameter.name.clone(),
-                        expected: parameter.t.resolve_type_annotation(),
+                        expected: self
+                            .type_context
+                            .resolve_annotation(&parameter.t)
+                            .unwrap_or(Type::Any),
                         found,
                     },
                     span: None,
@@ -313,6 +381,25 @@ impl std::fmt::Display for Value {
                 if r.inclusive { "=" } else { "<" },
                 r.end
             ),
+            Value::Struct(value) => {
+                write!(f, "{}(", value.type_id)?;
+                for (index, field) in value.fields.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{field}")?;
+                }
+                write!(f, ")")
+            }
+            Value::Enum(value) => {
+                write!(f, "{}::{}", value.type_id, value.variant_name)?;
+                if let Some(payload) = &value.payload {
+                    write!(f, "({payload})")?;
+                }
+                Ok(())
+            }
+            Value::Constructor(_) => write!(f, "<constructor>"),
+            Value::EnumNamespace(id) => write!(f, "<enum {id}>"),
         }
     }
 }
@@ -354,6 +441,10 @@ impl Value {
                 if r.inclusive { "=" } else { "<" },
                 r.end
             ),
+            Value::Struct(value) => format!("{} value", value.type_id),
+            Value::Enum(value) => format!("{} value", value.type_id),
+            Value::Constructor(_) => "<constructor>".to_string(),
+            Value::EnumNamespace(id) => format!("<enum {id}>"),
         }
     }
 }

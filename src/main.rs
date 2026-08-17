@@ -103,10 +103,10 @@ fn run_file(path: &PathBuf, no_check: bool) -> Result<()> {
         if program
             .items
             .iter()
-            .any(|item| matches!(item, Item::Import(_) | Item::Const(_)))
+            .any(|item| matches!(item, Item::Import(_) | Item::Const(_) | Item::Type(_)))
         {
             anyhow::bail!(
-                "--no-check only supports a function-only entry file; imports and compile-time constants require the module compiler"
+                "--no-check only supports a function-only entry file; imports, types, and compile-time constants require the module compiler"
             );
         }
         Interpreter::new(path, stdout.lock()).eval_program(program)?;

@@ -11,10 +11,8 @@ pub enum TypeBinding {
     Local(Type),
     Const(Type),
     ImportedMember {
-        module: ModuleId,
-        export_name: String,
-        ty: Type,
-        kind: ExportedSymbolKind,
+        ty: Box<Type>,
+        kind: Box<ExportedSymbolKind>,
     },
     Module(ModuleId),
 }
@@ -22,7 +20,8 @@ pub enum TypeBinding {
 impl TypeBinding {
     pub fn value_type(&self) -> Option<Type> {
         match self {
-            Self::Local(ty) | Self::Const(ty) | Self::ImportedMember { ty, .. } => Some(ty.clone()),
+            Self::Local(ty) | Self::Const(ty) => Some(ty.clone()),
+            Self::ImportedMember { ty, .. } => Some((**ty).clone()),
             Self::Module(_) => None,
         }
     }
@@ -31,12 +30,14 @@ impl TypeBinding {
 #[derive(Debug, Default, Clone)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, TypeBinding>>,
+    types: HashMap<String, Type>,
 }
 
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            types: HashMap::new(),
         }
     }
     pub fn push_scope(&mut self) {
@@ -85,5 +86,17 @@ impl TypeEnv {
 
     pub fn at_module_scope(&self) -> bool {
         self.scopes.len() == 1
+    }
+
+    pub fn define_type(&mut self, name: String, ty: Type) {
+        self.types.insert(name, ty);
+    }
+
+    pub fn get_type(&self, name: &str) -> Option<Type> {
+        self.types.get(name).cloned()
+    }
+
+    pub fn get_current_type(&self, name: &str) -> Option<Type> {
+        self.types.get(name).cloned()
     }
 }

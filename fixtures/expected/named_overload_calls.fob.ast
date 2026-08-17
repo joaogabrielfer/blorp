@@ -20,15 +20,19 @@ Program {
                                     Parameter {
                                         name: "value",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "String",
+                                    Path(
+                                        [
+                                            "String",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -111,15 +115,19 @@ Program {
                                     Parameter {
                                         name: "value",
                                         t: Explicit(
-                                            Named(
-                                                "String",
+                                            Path(
+                                                [
+                                                    "String",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "String",
+                                    Path(
+                                        [
+                                            "String",
+                                        ],
                                     ),
                                 ),
                                 body: Block {

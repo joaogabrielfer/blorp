@@ -1,0 +1,19 @@
+TypeError {
+    kind: UnknownField {
+        ty: "Point",
+        field: "y",
+    },
+    span: Span {
+        start: SrcPos {
+            line: 7,
+            col: 10,
+            idx: 93,
+        },
+        end: SrcPos {
+            line: 7,
+            col: 18,
+            idx: 101,
+        },
+    },
+    file_path: "$FIXTURE_PATH",
+}

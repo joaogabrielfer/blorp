@@ -6,18 +6,21 @@ use crate::{
     ast::{
         BinaryOp, Block, Expr, ExprArgument, ExprKind, FunctionDecl, Item, Program,
         Stmt::{self},
-        TypeAnnotation, UnaryOp, ValueArgument,
+        UnaryOp, ValueArgument,
     },
     errors::{ArgumentError, RuntimeError, RuntimeErrorKind},
     interpreter::{
         Interpreter,
         env::{BindingKind, Env, EnvFrame},
         values::{
-            FunctionBody, FunctionValue, OverloadFunctionVariant, RangeValue, RuntimeIterator,
-            Value,
+            ConstructorRef, EnumValue, FunctionBody, FunctionValue, OverloadFunctionVariant,
+            RangeValue, RuntimeIterator, StructValue, Value,
         },
     },
     source::{Span, SrcPos},
+    typechecker::ty::{
+        Type, TypeContext, TypeDefinition, TypeDefinitionKind, TypeId, VariantPayloadDefinition,
+    },
 };
 
 pub enum EvalFlow {
@@ -45,7 +48,13 @@ macro_rules! value_or_flow {
 
 impl<W: std::io::Write> Interpreter<W> {
     pub fn eval_program(&mut self, program: Program) -> Result<Value, Box<RuntimeError>> {
-        self.load_module(&program, &std::collections::HashMap::new())?;
+        let context = self.type_context.clone();
+        self.load_module(
+            &program,
+            &std::collections::HashMap::new(),
+            context,
+            &std::collections::HashMap::new(),
+        )?;
         self.run_main()
     }
 
@@ -75,7 +84,27 @@ impl<W: std::io::Write> Interpreter<W> {
         &mut self,
         program: &Program,
         constants: &std::collections::HashMap<String, Value>,
+        type_context: Rc<TypeContext>,
+        type_definitions: &std::collections::HashMap<TypeId, TypeDefinition>,
     ) -> Result<(), Box<RuntimeError>> {
+        self.install_type_metadata(type_context, type_definitions);
+        for item in &program.items {
+            if let Item::Type(decl) = item {
+                let id = match self.type_context.names.get(&vec![decl.name.clone()]) {
+                    Some(Type::Nominal(id)) => id.clone(),
+                    _ => continue,
+                };
+                let definition = self
+                    .type_definitions
+                    .get(&id)
+                    .expect("checked type definitions are available at runtime");
+                let value = match definition.kind {
+                    TypeDefinitionKind::Struct(_) => Value::Constructor(ConstructorRef::Struct(id)),
+                    TypeDefinitionKind::Enum(_) => Value::EnumNamespace(id),
+                };
+                self.env.define(decl.name.clone(), false, value);
+            }
+        }
         for item in &program.items {
             if let Item::Const(decl) = item {
                 let value = constants
@@ -221,6 +250,10 @@ impl<W: std::io::Write> Interpreter<W> {
                         target.span,
                         RuntimeErrorKind::ModuleMemberAssignment(segments.join("::")),
                     )),
+                    ExprKind::Field { .. } => {
+                        Err(self
+                            .error_at(target.span, RuntimeErrorKind::FieldAssignmentUnsupported))
+                    }
                     _ => Err(self.error_at(
                         target.span,
                         RuntimeErrorKind::InvalidAssignmentTarget(target.kind.to_string()),
@@ -244,6 +277,10 @@ impl<W: std::io::Write> Interpreter<W> {
             ..
         } = decl;
         let fun = if let Ok(Value::Function(mut fun)) = self.env.get(&name) {
+            let return_type = self
+                .type_context
+                .resolve_annotation(&return_type)
+                .unwrap_or(Type::Any);
             if fun.return_type == return_type {
                 let mut repeated = false;
                 for p in &fun.overload_variants {
@@ -265,17 +302,22 @@ impl<W: std::io::Write> Interpreter<W> {
                     name: Some(name.clone()),
                     overload_variants,
                     return_type,
+                    type_context: self.type_context.clone(),
                 })
             } else {
                 return Err(self.error_at(
                     span,
                     RuntimeErrorKind::MismatchedReturnTypes {
-                        expected: fun.return_type.resolve_type_annotation().to_string(),
-                        found: return_type.resolve_type_annotation().to_string(),
+                        expected: fun.return_type.to_string(),
+                        found: return_type.to_string(),
                     },
                 ));
             }
         } else {
+            let return_type = self
+                .type_context
+                .resolve_annotation(&return_type)
+                .unwrap_or(Type::Any);
             Value::Function(FunctionValue {
                 name: Some(name.clone()),
                 overload_variants: vec![OverloadFunctionVariant {
@@ -284,6 +326,7 @@ impl<W: std::io::Write> Interpreter<W> {
                     captured_env: self.env.current_ref(),
                 }],
                 return_type,
+                type_context: self.type_context.clone(),
             })
         };
 
@@ -329,7 +372,8 @@ impl<W: std::io::Write> Interpreter<W> {
                         body: FunctionBody::Expr(*body),
                         captured_env: self.env.current_ref(),
                     }],
-                    return_type: TypeAnnotation::Inferred,
+                    return_type: Type::Any,
+                    type_context: self.type_context.clone(),
                 })))
             }
             ExprKind::Index { target, index } => {
@@ -366,6 +410,8 @@ impl<W: std::io::Write> Interpreter<W> {
                 }
                 Ok(EvalFlow::Continue(array[index as usize].clone()))
             }
+            ExprKind::Field { target, name } => self.eval_field(*target, name, expr.span),
+            ExprKind::Match { value, arms } => self.eval_match(*value, arms, yield_mode, expr.span),
         }
     }
 
@@ -412,6 +458,8 @@ impl<W: std::io::Write> Interpreter<W> {
                 }
                 self.call_function(fun, args_values, span)
             }
+
+            Value::Constructor(constructor) => self.call_constructor(constructor, args, span),
 
             other => Err(self.error_at(
                 callee_span,
@@ -616,41 +664,323 @@ impl<W: std::io::Write> Interpreter<W> {
         segments: Vec<String>,
         span: Span,
     ) -> Result<EvalFlow, Box<RuntimeError>> {
-        let (module_name, member_path) = segments
+        let (head, tail) = segments
             .split_first()
-            .expect("qualified paths always contain a module name");
-        let [member] = member_path else {
-            return Err(self.error_at(
-                span,
-                RuntimeErrorKind::UnknownModuleExport {
-                    module: module_name.clone(),
-                    member: member_path.join("::"),
-                },
-            ));
-        };
-        let value = self
+            .expect("qualified paths always contain a head");
+        let mut value = self
             .env
-            .get(module_name)
+            .get(head)
             .map_err(|kind| self.error_at(span, kind))?;
-        let Value::Module(module) = value else {
+        for member in tail {
+            value = match value {
+                Value::Module(module) => {
+                    if !module.exports.contains(member) {
+                        return Err(self.error_at(
+                            span,
+                            RuntimeErrorKind::UnknownModuleExport {
+                                module: module.id.to_string(),
+                                member: member.clone(),
+                            },
+                        ));
+                    }
+                    Env::from_ref(module.env.clone())
+                        .get(member)
+                        .map_err(|kind| self.error_at(span, kind))?
+                }
+                Value::EnumNamespace(enum_id) => self.enum_variant_value(&enum_id, member, span)?,
+                other => {
+                    return Err(self.error_at(
+                        span,
+                        RuntimeErrorKind::InvalidAssignmentTarget(other.type_name()),
+                    ));
+                }
+            };
+        }
+        Ok(EvalFlow::Continue(value))
+    }
+
+    fn type_definition(&self, id: &TypeId) -> Option<&TypeDefinition> {
+        self.type_definitions.get(id)
+    }
+
+    fn enum_variant_value(
+        &self,
+        enum_id: &TypeId,
+        name: &str,
+        span: Span,
+    ) -> Result<Value, Box<RuntimeError>> {
+        let Some(TypeDefinition {
+            kind: TypeDefinitionKind::Enum(definition),
+            ..
+        }) = self.type_definition(enum_id)
+        else {
+            return Err(self.error_at(span, RuntimeErrorKind::NotAnEnum(enum_id.to_string())));
+        };
+        let variant = definition
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .ok_or_else(|| {
+                self.error_at(
+                    span,
+                    RuntimeErrorKind::UnknownEnumVariant {
+                        ty: enum_id.to_string(),
+                        variant: name.to_string(),
+                    },
+                )
+            })?;
+        match variant.payload {
+            VariantPayloadDefinition::Unit => Ok(Value::Enum(EnumValue {
+                type_id: enum_id.clone(),
+                variant_index: variant.index,
+                variant_name: variant.name.clone(),
+                payload: None,
+            })),
+            _ => Ok(Value::Constructor(ConstructorRef::EnumVariant {
+                enum_id: enum_id.clone(),
+                variant_index: variant.index,
+            })),
+        }
+    }
+
+    fn call_constructor(
+        &mut self,
+        constructor: ConstructorRef,
+        args: Vec<ExprArgument>,
+        span: Span,
+    ) -> Result<EvalFlow, Box<RuntimeError>> {
+        let mut arguments = Vec::new();
+        for argument in args {
+            let value = value_or_flow!(self.eval_expr(argument.value, YieldMode::Capture)?);
+            arguments.push((argument.name.map(|name| name.value), value));
+        }
+
+        match constructor {
+            ConstructorRef::Struct(type_id) => {
+                let Some(TypeDefinition {
+                    kind: TypeDefinitionKind::Struct(definition),
+                    ..
+                }) = self.type_definition(&type_id)
+                else {
+                    return Err(
+                        self.error_at(span, RuntimeErrorKind::NotAStruct(type_id.to_string()))
+                    );
+                };
+                let fields =
+                    self.normalize_constructor_fields(&definition.fields, arguments, true, span)?;
+                Ok(EvalFlow::Continue(Value::Struct(StructValue {
+                    type_id,
+                    fields,
+                })))
+            }
+            ConstructorRef::EnumVariant {
+                enum_id,
+                variant_index,
+            } => {
+                let Some(TypeDefinition {
+                    kind: TypeDefinitionKind::Enum(definition),
+                    ..
+                }) = self.type_definition(&enum_id)
+                else {
+                    return Err(
+                        self.error_at(span, RuntimeErrorKind::NotAnEnum(enum_id.to_string()))
+                    );
+                };
+                let variant = definition
+                    .variants
+                    .get(variant_index)
+                    .expect("checked variant indexes are valid");
+                let payload = match &variant.payload {
+                    VariantPayloadDefinition::Unit => {
+                        return Err(self.error_at(
+                            span,
+                            RuntimeErrorKind::NotCallable("unit enum variant".to_string()),
+                        ));
+                    }
+                    VariantPayloadDefinition::Value(_) => {
+                        if arguments.len() != 1 || arguments[0].0.is_some() {
+                            return Err(self.error_at(
+                                span,
+                                RuntimeErrorKind::InvalidFunctionParameters(
+                                    "enum payload constructors take one positional argument"
+                                        .to_string(),
+                                ),
+                            ));
+                        }
+                        Some(Box::new(arguments.pop().expect("checked length").1))
+                    }
+                    VariantPayloadDefinition::InlineStruct(payload_id) => {
+                        let Some(TypeDefinition {
+                            kind: TypeDefinitionKind::Struct(structure),
+                            ..
+                        }) = self.type_definition(payload_id)
+                        else {
+                            unreachable!("inline payload definitions are structs");
+                        };
+                        let fields = self.normalize_constructor_fields(
+                            &structure.fields,
+                            arguments,
+                            true,
+                            span,
+                        )?;
+                        Some(Box::new(Value::Struct(StructValue {
+                            type_id: payload_id.clone(),
+                            fields,
+                        })))
+                    }
+                };
+                Ok(EvalFlow::Continue(Value::Enum(EnumValue {
+                    type_id: enum_id,
+                    variant_index,
+                    variant_name: variant.name.clone(),
+                    payload,
+                })))
+            }
+        }
+    }
+
+    fn normalize_constructor_fields(
+        &self,
+        fields: &[crate::typechecker::ty::FieldDefinition],
+        arguments: Vec<(Option<String>, Value)>,
+        named_only: bool,
+        span: Span,
+    ) -> Result<Vec<Value>, Box<RuntimeError>> {
+        let mut bound = vec![None; fields.len()];
+        for (name, value) in arguments {
+            let Some(name) = name else {
+                if named_only {
+                    return Err(self.error_at(
+                        span,
+                        RuntimeErrorKind::InvalidFunctionParameters(
+                            "struct constructors require named arguments".to_string(),
+                        ),
+                    ));
+                }
+                continue;
+            };
+            let index = fields
+                .iter()
+                .position(|field| field.name == name)
+                .ok_or_else(|| {
+                    self.error_at(
+                        span,
+                        RuntimeErrorKind::InvalidFunctionParameters(format!(
+                            "unknown field '{name}'"
+                        )),
+                    )
+                })?;
+            if bound[index].is_some() {
+                return Err(self.error_at(
+                    span,
+                    RuntimeErrorKind::InvalidFunctionParameters(format!(
+                        "duplicate field '{name}'"
+                    )),
+                ));
+            }
+            bound[index] = Some(value);
+        }
+        fields
+            .iter()
+            .zip(bound)
+            .map(|(field, value)| {
+                value.ok_or_else(|| {
+                    self.error_at(
+                        span,
+                        RuntimeErrorKind::InvalidFunctionParameters(format!(
+                            "missing field '{}'",
+                            field.name
+                        )),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn eval_field(
+        &mut self,
+        target: Expr,
+        name: String,
+        span: Span,
+    ) -> Result<EvalFlow, Box<RuntimeError>> {
+        let value = value_or_flow!(self.eval_expr(target, YieldMode::Capture)?);
+        let Value::Struct(value) = value else {
+            return Err(self.error_at(span, RuntimeErrorKind::NotAStruct(value.type_name())));
+        };
+        let Some(TypeDefinition {
+            kind: TypeDefinitionKind::Struct(definition),
+            ..
+        }) = self.type_definition(&value.type_id)
+        else {
             return Err(self.error_at(
                 span,
-                RuntimeErrorKind::InvalidAssignmentTarget(module_name.clone()),
+                RuntimeErrorKind::NotAStruct(value.type_id.to_string()),
             ));
         };
-        if !module.exports.contains(member) {
-            return Err(self.error_at(
-                span,
-                RuntimeErrorKind::UnknownModuleExport {
-                    module: module.id.to_string(),
-                    member: member.clone(),
-                },
-            ));
+        let index = definition
+            .fields
+            .iter()
+            .position(|field| field.name == name)
+            .ok_or_else(|| {
+                self.error_at(
+                    span,
+                    RuntimeErrorKind::UnknownField {
+                        ty: value.type_id.to_string(),
+                        field: name,
+                    },
+                )
+            })?;
+        Ok(EvalFlow::Continue(value.fields[index].clone()))
+    }
+
+    fn eval_match(
+        &mut self,
+        value: Expr,
+        arms: Vec<crate::ast::MatchArm>,
+        yield_mode: YieldMode,
+        span: Span,
+    ) -> Result<EvalFlow, Box<RuntimeError>> {
+        let value = value_or_flow!(self.eval_expr(value, YieldMode::Capture)?);
+        let Value::Enum(enum_value) = value else {
+            return Err(self.error_at(span, RuntimeErrorKind::NotAnEnum(value.type_name())));
+        };
+        for arm in arms {
+            let matched = match &arm.pattern {
+                crate::ast::Pattern::Wildcard { .. } => true,
+                crate::ast::Pattern::EnumVariant { variant, .. } => self
+                    .type_definition(&enum_value.type_id)
+                    .and_then(|definition| match &definition.kind {
+                        TypeDefinitionKind::Enum(definition) => {
+                            definition.variants.get(enum_value.variant_index)
+                        }
+                        _ => None,
+                    })
+                    .is_some_and(|definition| definition.name == *variant),
+            };
+            if !matched {
+                continue;
+            }
+            let previous = self.env.clone();
+            self.env.push_scope();
+            if let crate::ast::Pattern::EnumVariant {
+                binding: Some(name),
+                ..
+            } = arm.pattern
+            {
+                self.env.define(
+                    name,
+                    false,
+                    *enum_value
+                        .payload
+                        .clone()
+                        .expect("checked payload binding has a payload"),
+                );
+            }
+            let result = self.eval_block(arm.body, yield_mode);
+            self.env = previous;
+            return result;
         }
-        let value = Env::from_ref(module.env.clone())
-            .get(member)
-            .map_err(|kind| self.error_at(span, kind))?;
-        Ok(EvalFlow::Continue(value))
+        Err(self.error_at(span, RuntimeErrorKind::NotImplemented))
     }
 
     fn eval_tuple(&mut self, exprs: Vec<Expr>) -> Result<EvalFlow, Box<RuntimeError>> {
@@ -806,6 +1136,10 @@ impl<W: std::io::Write> Interpreter<W> {
                     (Value::Function(a), Value::Function(b)) => {
                         Ok(EvalFlow::Continue(Value::Bool(a == b)))
                     }
+                    (Value::Struct(a), Value::Struct(b)) => {
+                        Ok(EvalFlow::Continue(Value::Bool(a == b)))
+                    }
+                    (Value::Enum(a), Value::Enum(b)) => Ok(EvalFlow::Continue(Value::Bool(a == b))),
                     (other_lhs, other_rhs) => Err(self.error_at(
                         span,
                         RuntimeErrorKind::InvalidBinaryOp {
@@ -840,6 +1174,10 @@ impl<W: std::io::Write> Interpreter<W> {
                     (Value::Function(a), Value::Function(b)) => {
                         Ok(EvalFlow::Continue(Value::Bool(a != b)))
                     }
+                    (Value::Struct(a), Value::Struct(b)) => {
+                        Ok(EvalFlow::Continue(Value::Bool(a != b)))
+                    }
+                    (Value::Enum(a), Value::Enum(b)) => Ok(EvalFlow::Continue(Value::Bool(a != b))),
                     (other_lhs, other_rhs) => Err(self.error_at(
                         span,
                         RuntimeErrorKind::InvalidBinaryOp {
@@ -1005,6 +1343,8 @@ impl<W: std::io::Write> Interpreter<W> {
             .map_err(|e| self.argument_error(span, *e))?;
 
         let previous_env = self.env.clone();
+        let previous_type_context = self.type_context.clone();
+        self.type_context = fun.type_context.clone();
         self.env = Env::from_ref(Rc::new(RefCell::new(EnvFrame {
             frame: HashMap::new(),
             parent: Some(
@@ -1027,6 +1367,7 @@ impl<W: std::io::Write> Interpreter<W> {
         };
 
         self.env = previous_env;
+        self.type_context = previous_type_context;
 
         match result? {
             EvalFlow::Continue(value) => Ok(EvalFlow::Continue(value)),

@@ -1,0 +1,21 @@
+TypeError {
+    kind: ArgumentError {
+        e: ArgumentError {
+            kind: NamedOnly,
+            span: None,
+        },
+    },
+    span: Span {
+        start: SrcPos {
+            line: 7,
+            col: 18,
+            idx: 82,
+        },
+        end: SrcPos {
+            line: 7,
+            col: 24,
+            idx: 88,
+        },
+    },
+    file_path: "$FIXTURE_PATH",
+}

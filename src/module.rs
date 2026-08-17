@@ -18,7 +18,10 @@ use crate::{
     lexer::Lexer,
     parser::Parser,
     source::Span,
-    typechecker::{CheckedModule, TypeChecker, ty::Type},
+    typechecker::{
+        CheckedModule, TypeChecker,
+        ty::{Type, TypeContext, TypeDefinition, TypeId},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -53,9 +56,16 @@ pub struct ExportedSymbol {
     pub kind: ExportedSymbolKind,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportedType {
+    pub id: TypeId,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ModuleInterface {
     pub exports: HashMap<String, ExportedSymbol>,
+    pub types: HashMap<String, ExportedType>,
+    pub type_definitions: HashMap<TypeId, TypeDefinition>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +105,8 @@ pub struct CompiledModule {
     pub imports: Vec<ResolvedImport>,
     pub interface: ModuleInterface,
     pub constants: HashMap<String, Value>,
+    pub type_definitions: HashMap<TypeId, TypeDefinition>,
+    pub type_context: Rc<TypeContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,17 +246,28 @@ impl CompilerSession {
             program,
             interface,
             constants,
-        } = TypeChecker::new(path.clone()).check_module(program, &imports, &interfaces)?;
+            type_definitions,
+        } = TypeChecker::for_module(path.clone(), id.clone()).check_module(
+            program,
+            &imports,
+            &interfaces,
+        )?;
+        let crate::typechecker::CheckedProgram {
+            program,
+            type_context,
+        } = program;
 
         self.modules.insert(
             id.clone(),
             CompiledModule {
                 id,
                 path,
-                program: program.program,
+                program,
                 imports,
                 interface,
                 constants,
+                type_definitions,
+                type_context,
             },
         );
         Ok(())
@@ -427,7 +450,9 @@ impl CompilerSession {
             .get(&module)
             .expect("loaded module must have an interface")
             .interface;
-        if !interface.exports.contains_key(export_name) {
+        if !interface.exports.contains_key(export_name)
+            && !interface.types.contains_key(export_name)
+        {
             bail!("module '{}' does not export '{}'", module, export_name);
         }
         Ok(vec![ResolvedImport::Member {
@@ -444,13 +469,21 @@ impl CompilerSession {
             .get(&module)
             .expect("loaded module must have an interface")
             .interface;
-        Ok(interface
+        let mut export_names = interface
             .exports
             .keys()
+            .chain(interface.types.keys())
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        export_names.sort();
+        Ok(export_names
+            .into_iter()
             .map(|export_name| ResolvedImport::Member {
                 module: module.clone(),
                 export_name: export_name.clone(),
-                local_name: export_name.clone(),
+                local_name: export_name,
                 span,
             })
             .collect())
@@ -587,7 +620,12 @@ impl RuntimeModules {
             exports: module.interface.exports.keys().cloned().collect(),
         });
         let (previous_env, previous_path) = interpreter.replace_context(env, module.path.clone());
-        let eval_result = interpreter.load_module(&module.program, &module.constants);
+        let eval_result = interpreter.load_module(
+            &module.program,
+            &module.constants,
+            module.type_context.clone(),
+            &module.type_definitions,
+        );
         interpreter.restore_context(previous_env, previous_path);
         eval_result.map_err(|error: Box<RuntimeError>| anyhow!(error))?;
 

@@ -2903,8 +2903,10 @@ Program {
                                 generics: [],
                                 parameters: [],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {

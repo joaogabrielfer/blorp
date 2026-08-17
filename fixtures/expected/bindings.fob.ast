@@ -49,8 +49,10 @@ Program {
                             mutable: true,
                             name: "bar",
                             type_annotation: Explicit(
-                                Named(
-                                    "String",
+                                Path(
+                                    [
+                                        "String",
+                                    ],
                                 ),
                             ),
                             value: Expr {

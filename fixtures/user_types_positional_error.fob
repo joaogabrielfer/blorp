@@ -1,0 +1,8 @@
+type Point: struct =
+    x: Int
+    y: Int
+end
+
+fun main(): () =
+    let point := Point(10, 20)
+end

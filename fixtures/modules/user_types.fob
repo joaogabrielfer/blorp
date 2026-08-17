@@ -1,0 +1,16 @@
+pub type Point: struct =
+    x: Int
+    y: Int
+end
+
+pub type Message: enum =
+    Text: String
+
+    Move: struct =
+        point: Point
+    end
+end
+
+pub fun origin(): Point =
+    return Point(x = 0, y = 0)
+end

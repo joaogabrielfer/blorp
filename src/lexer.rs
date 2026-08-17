@@ -87,6 +87,9 @@ pub enum TokenKind<'a> {
     Import,
     As,
     Pub,
+    Type,
+    Struct,
+    Enum,
 
     NewLine,
     Eof,
@@ -150,6 +153,9 @@ impl<'a> TokenKind<'a> {
             TokenKind::Import => TokenTag::Import,
             TokenKind::As => TokenTag::As,
             TokenKind::Pub => TokenTag::Pub,
+            TokenKind::Type => TokenTag::Type,
+            TokenKind::Struct => TokenTag::Struct,
+            TokenKind::Enum => TokenTag::Enum,
 
             TokenKind::NewLine => TokenTag::NewLine,
             TokenKind::Eof => TokenTag::Eof,
@@ -214,6 +220,9 @@ pub enum TokenTag {
     Import,
     As,
     Pub,
+    Type,
+    Struct,
+    Enum,
 
     NewLine,
     Eof,
@@ -298,6 +307,9 @@ impl std::fmt::Display for TokenTag {
             TokenTag::Import => "import",
             TokenTag::As => "as",
             TokenTag::Pub => "pub",
+            TokenTag::Type => "type",
+            TokenTag::Struct => "struct",
+            TokenTag::Enum => "enum",
 
             TokenTag::NewLine => "newline",
             TokenTag::Eof => "EOF",
@@ -478,6 +490,9 @@ impl<'a> Lexer<'a> {
                     "import" => Ok(self.new_token(TokenKind::Import, "import")),
                     "as" => Ok(self.new_token(TokenKind::As, "as")),
                     "pub" => Ok(self.new_token(TokenKind::Pub, "pub")),
+                    "type" => Ok(self.new_token(TokenKind::Type, "type")),
+                    "struct" => Ok(self.new_token(TokenKind::Struct, "struct")),
+                    "enum" => Ok(self.new_token(TokenKind::Enum, "enum")),
                     _ => Ok(self.new_token(TokenKind::Ident(s), s)),
                 }
             }

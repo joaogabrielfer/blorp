@@ -31,8 +31,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "COUNT",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Binary {

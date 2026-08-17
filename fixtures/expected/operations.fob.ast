@@ -15,8 +15,10 @@ Program {
                             mutable: false,
                             name: "foo",
                             type_annotation: Explicit(
-                                Named(
-                                    "Int",
+                                Path(
+                                    [
+                                        "Int",
+                                    ],
                                 ),
                             ),
                             value: Expr {
@@ -393,8 +395,10 @@ Program {
                             mutable: false,
                             name: "y",
                             type_annotation: Explicit(
-                                Named(
-                                    "Bool",
+                                Path(
+                                    [
+                                        "Bool",
+                                    ],
                                 ),
                             ),
                             value: Expr {
@@ -499,8 +503,10 @@ Program {
                             mutable: false,
                             name: "z",
                             type_annotation: Explicit(
-                                Named(
-                                    "Float",
+                                Path(
+                                    [
+                                        "Float",
+                                    ],
                                 ),
                             ),
                             value: Expr {
@@ -605,8 +611,10 @@ Program {
                             mutable: false,
                             name: "w",
                             type_annotation: Explicit(
-                                Named(
-                                    "Int",
+                                Path(
+                                    [
+                                        "Int",
+                                    ],
                                 ),
                             ),
                             value: Expr {

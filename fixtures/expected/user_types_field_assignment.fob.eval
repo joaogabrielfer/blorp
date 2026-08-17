@@ -1,0 +1,16 @@
+TypeError {
+    kind: FieldAssignmentUnsupported,
+    span: Span {
+        start: SrcPos {
+            line: 7,
+            col: 5,
+            idx: 88,
+        },
+        end: SrcPos {
+            line: 7,
+            col: 14,
+            idx: 97,
+        },
+    },
+    file_path: "$FIXTURE_PATH",
+}

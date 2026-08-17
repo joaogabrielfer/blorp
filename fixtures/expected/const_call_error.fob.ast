@@ -7,8 +7,10 @@ Program {
                 generics: [],
                 parameters: [],
                 return_type: Explicit(
-                    Named(
-                        "Int",
+                    Path(
+                        [
+                            "Int",
+                        ],
                     ),
                 ),
                 body: Block {
@@ -52,8 +54,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "VALUE",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Call {

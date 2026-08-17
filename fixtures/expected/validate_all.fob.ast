@@ -49,8 +49,10 @@ Program {
                             mutable: false,
                             name: "int_value",
                             type_annotation: Explicit(
-                                Named(
-                                    "Int",
+                                Path(
+                                    [
+                                        "Int",
+                                    ],
                                 ),
                             ),
                             value: Expr {
@@ -1822,23 +1824,29 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "y",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                 ],
                                 return_type: Explicit(
-                                    Named(
-                                        "Int",
+                                    Path(
+                                        [
+                                            "Int",
+                                        ],
                                     ),
                                 ),
                                 body: Block {
@@ -1965,16 +1973,20 @@ Program {
                                     Parameter {
                                         name: "x",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },
                                     Parameter {
                                         name: "y",
                                         t: Explicit(
-                                            Named(
-                                                "Int",
+                                            Path(
+                                                [
+                                                    "Int",
+                                                ],
                                             ),
                                         ),
                                     },

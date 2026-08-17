@@ -1,0 +1,8 @@
+type Point: struct =
+    x: Int
+end
+
+fun main(): () =
+    var point := Point(x = 1)
+    point.x = 2
+end

@@ -6,11 +6,21 @@ declarations are evaluated at compile time. They are intentionally a small,
 value-only layer: calls and other runtime constructs are rejected, while
 references to local or imported public constants are supported.
 
+The following are implemented without generics or interfaces:
+
+- named nominal structs with named-only constructors and read-only field projection;
+- named nominal enums with unit variants, one colon-delimited payload type per
+  variant, and generated constructors;
+- inline anonymous struct payloads for enum variants, exposed as associated
+  types such as `Message::Move` in type positions;
+- exhaustive enum variant matching with payload binding and `_`.
+
 The following remain design goals, not supported syntax:
 
 - nominal wrapper types and transparent aliases;
-- structs, constructors, tags, enums, and algebraic data types;
-- pattern matching and custom patterns;
+- aliases, wrapper types, tags, and configurable enum representations;
+- anonymous types outside enum payloads, custom constructors, field mutation,
+  and general/custom patterns;
 - generics and interfaces;
 - type-level constant parameters, such as fixed-size arrays;
 - macros, syntax types, templates, interpolation, and hygienic expansion.

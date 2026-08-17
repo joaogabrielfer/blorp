@@ -48,8 +48,10 @@ Program {
             ConstDecl {
                 public: false,
                 name: "START",
-                type_annotation: Named(
-                    "Int",
+                type_annotation: Path(
+                    [
+                        "Int",
+                    ],
                 ),
                 value: Expr {
                     kind: Int(

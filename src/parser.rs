@@ -1,7 +1,8 @@
 use crate::{
     ast::{
-        self, BinaryOp, Expr, ExprArgument, ExprKind, ImportItem, ImportSource, ImportTree,
-        Parameter, RelativeImportMode, TypeAnnotation, TypeExpr,
+        self, BinaryOp, EnumDecl, EnumPayloadDecl, EnumVariantDecl, Expr, ExprArgument, ExprKind,
+        ImportItem, ImportSource, ImportTree, Parameter, RelativeImportMode, StructDecl,
+        StructFieldDecl, TypeAnnotation, TypeDecl, TypeDeclKind, TypeExpr,
     },
     errors::{ParserError, ParserErrorKind},
     lexer::{
@@ -58,6 +59,7 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Result<ast::Item, Box<ParserError>> {
         let public = self.check_and_advance(TokenTag::Pub);
         match self.current().kind {
+            TokenKind::Type => self.parse_type_decl(public).map(ast::Item::Type),
             TokenKind::Const => self.parse_const_decl(public).map(ast::Item::Const),
             TokenKind::Fun => self.parse_fun_decl(public).map(ast::Item::Function),
             TokenKind::Import => {
@@ -91,11 +93,10 @@ impl<'a> Parser<'a> {
                 Ok(ast::Stmt::Yield(self.parse_expr()?))
             }
             TokenKind::Fun => self.parse_fun_decl(false).map(ast::Stmt::Function),
-            TokenKind::Const | TokenKind::Import | TokenKind::Pub => {
-                Err(self.error(ParserErrorKind::UnexpectedToken {
+            TokenKind::Const | TokenKind::Import | TokenKind::Pub | TokenKind::Type => Err(self
+                .error(ParserErrorKind::UnexpectedToken {
                     found: self.current_tag().to_string(),
-                }))
-            }
+                })),
             _ => {
                 let starting_span = self.current().span;
                 let expr = self.parse_expr()?;
@@ -106,6 +107,7 @@ impl<'a> Parser<'a> {
                             | ast::ExprKind::Path(_)
                             | ast::ExprKind::Tuple(_)
                             | ast::ExprKind::Index { .. }
+                            | ast::ExprKind::Field { .. }
                     ) {
                         return Err(Box::new(ParserError {
                             kind: ParserErrorKind::InvalidAssignmentTarget {
@@ -155,6 +157,126 @@ impl<'a> Parser<'a> {
             span: Span {
                 start: start_span.start,
                 end: value_span.end,
+            },
+        })
+    }
+
+    fn parse_type_decl(&mut self, public: bool) -> Result<TypeDecl, Box<ParserError>> {
+        let start = self.current().span;
+        self.expect(TokenTag::Type)?;
+        let name = self.expect_ident()?;
+        self.expect(TokenTag::Colon)?;
+        let kind = match self.current_tag() {
+            TokenTag::Struct => TypeDeclKind::Struct(self.parse_struct_decl()?),
+            TokenTag::Enum => TypeDeclKind::Enum(self.parse_enum_decl()?),
+            _ => {
+                return Err(self.error(ParserErrorKind::ExpectedTokens {
+                    expected: vec!["struct".to_string(), "enum".to_string()],
+                    found: self.current_tag().to_string(),
+                }));
+            }
+        };
+        let end = match &kind {
+            TypeDeclKind::Struct(decl) => decl.span.end,
+            TypeDeclKind::Enum(decl) => decl.span.end,
+        };
+        Ok(TypeDecl {
+            public,
+            name,
+            kind,
+            span: Span {
+                start: start.start,
+                end,
+            },
+        })
+    }
+
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, Box<ParserError>> {
+        let start = self.current().span;
+        self.expect(TokenTag::Struct)?;
+        self.expect(TokenTag::Equals)?;
+        self.expect(TokenTag::NewLine)?;
+        self.consume_newlines();
+
+        let mut fields = Vec::new();
+        while !self.check(TokenTag::End) {
+            let field_start = self.current().span;
+            let name = self.expect_ident()?;
+            self.expect(TokenTag::Colon)?;
+            let ty = self.parse_required_type()?;
+            let end = self.current().span;
+            self.check_and_advance(TokenTag::Comma);
+            self.expect(TokenTag::NewLine)?;
+            self.consume_newlines();
+            fields.push(StructFieldDecl {
+                name,
+                ty,
+                span: Span {
+                    start: field_start.start,
+                    end: end.end,
+                },
+            });
+        }
+        let end = self.current().span;
+        self.expect(TokenTag::End)?;
+        Ok(StructDecl {
+            fields,
+            span: Span {
+                start: start.start,
+                end: end.end,
+            },
+        })
+    }
+
+    fn parse_enum_decl(&mut self) -> Result<EnumDecl, Box<ParserError>> {
+        let start = self.current().span;
+        self.expect(TokenTag::Enum)?;
+        self.expect(TokenTag::Equals)?;
+        self.expect(TokenTag::NewLine)?;
+        self.consume_newlines();
+
+        let mut variants = Vec::new();
+        while !self.check(TokenTag::End) {
+            let variant_start = self.current().span;
+            let name = self.expect_ident()?;
+            let payload = if self.check_and_advance(TokenTag::Colon) {
+                if self.check(TokenTag::Struct) {
+                    Some(EnumPayloadDecl::InlineStruct(self.parse_struct_decl()?))
+                } else {
+                    Some(EnumPayloadDecl::Type(self.parse_required_type()?))
+                }
+            } else {
+                None
+            };
+
+            let end = match &payload {
+                Some(EnumPayloadDecl::InlineStruct(decl)) => decl.span.end,
+                _ => self.current().span.end,
+            };
+            if !matches!(payload, Some(EnumPayloadDecl::InlineStruct(_))) {
+                self.check_and_advance(TokenTag::Comma);
+                self.expect(TokenTag::NewLine)?;
+                self.consume_newlines();
+            } else {
+                self.check_and_advance(TokenTag::Comma);
+                self.consume_newlines();
+            }
+            variants.push(EnumVariantDecl {
+                name,
+                payload,
+                span: Span {
+                    start: variant_start.start,
+                    end,
+                },
+            });
+        }
+        let end = self.current().span;
+        self.expect(TokenTag::End)?;
+        Ok(EnumDecl {
+            variants,
+            span: Span {
+                start: start.start,
+                end: end.end,
             },
         })
     }
@@ -542,50 +664,53 @@ impl<'a> Parser<'a> {
                     let method_name = self.expect_ident()?;
                     let end_span = self.current().span;
 
-                    if !self.check(TokenTag::LParen) {
-                        return Err(self.error(ParserErrorKind::ExpectedToken {
-                            expected: "(".to_string(),
-                            found: self.current().kind.tag().to_string(),
-                        }));
-                    }
+                    if self.check(TokenTag::LParen) {
+                        let mut args = self.parse_call_args()?;
 
-                    let mut args = self.parse_call_args()?;
-
-                    if let ExprKind::Tuple(mut t) = expr.kind {
-                        while let Some(e) = t.pop() {
+                        if let ExprKind::Tuple(mut t) = expr.kind {
+                            while let Some(e) = t.pop() {
+                                args.insert(
+                                    0,
+                                    ExprArgument {
+                                        name: None,
+                                        span: e.span,
+                                        value: e,
+                                    },
+                                );
+                            }
+                        } else {
                             args.insert(
                                 0,
                                 ExprArgument {
                                     name: None,
-                                    span: e.span,
-                                    value: e,
+                                    span: expr.span,
+                                    value: expr,
                                 },
                             );
                         }
+
+                        expr = self.new_expr(
+                            start_span,
+                            ExprKind::Call {
+                                callee: Box::new(Expr {
+                                    kind: ExprKind::Ident(method_name),
+                                    span: Span {
+                                        start: start_span.start,
+                                        end: end_span.end,
+                                    },
+                                }),
+                                args,
+                            },
+                        );
                     } else {
-                        args.insert(
-                            0,
-                            ExprArgument {
-                                name: None,
-                                span: expr.span,
-                                value: expr,
+                        expr = self.new_expr(
+                            start_span,
+                            ExprKind::Field {
+                                target: Box::new(expr),
+                                name: method_name,
                             },
                         );
                     }
-
-                    expr = self.new_expr(
-                        start_span,
-                        ExprKind::Call {
-                            callee: Box::new(Expr {
-                                kind: ExprKind::Ident(method_name),
-                                span: Span {
-                                    start: start_span.start,
-                                    end: end_span.end,
-                                },
-                            }),
-                            args,
-                        },
-                    );
 
                     continue;
                 }
@@ -685,6 +810,7 @@ impl<'a> Parser<'a> {
                 Ok(self.new_expr(start_span, kind))
             }
             TokenKind::If => self.parse_if_expr(),
+            TokenKind::Match => self.parse_match_expr(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
             TokenKind::Do => {
@@ -731,60 +857,124 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_option_type(&mut self) -> Result<ast::TypeAnnotation, Box<ParserError>> {
+        if self.check(TokenTag::Equals) {
+            Ok(ast::TypeAnnotation::Inferred)
+        } else {
+            self.parse_required_type()
+                .map(ast::TypeAnnotation::Explicit)
+        }
+    }
+
+    fn parse_required_type(&mut self) -> Result<TypeExpr, Box<ParserError>> {
         match self.current_tag() {
-            TokenTag::Equals => Ok(ast::TypeAnnotation::Inferred),
             TokenTag::Ident => {
-                let t = self.expect_ident()?;
-                if t == "Arr" {
-                    self.expect(TokenTag::LAngle)?;
-                    let inner = self.expect_ident()?;
+                let mut path = vec![self.expect_ident()?];
+                while self.check_and_advance(TokenTag::ColonColon) {
+                    path.push(self.expect_ident()?);
+                }
+                if self.check_and_advance(TokenTag::LAngle) {
+                    let mut arguments = vec![self.parse_required_type()?];
+                    while self.check_and_advance(TokenTag::Comma) {
+                        arguments.push(self.parse_required_type()?);
+                    }
                     self.expect(TokenTag::RAngle)?;
-                    Ok(ast::TypeAnnotation::Explicit(ast::TypeExpr::Array(inner)))
+                    Ok(TypeExpr::Apply {
+                        constructor: path,
+                        arguments,
+                    })
                 } else {
-                    Ok(ast::TypeAnnotation::Explicit(ast::TypeExpr::Named(
-                        t.to_string(),
-                    )))
+                    Ok(TypeExpr::Path(path))
                 }
             }
             TokenTag::LParen => {
                 self.expect(TokenTag::LParen)?;
-                match self.current_tag() {
-                    TokenTag::RParen => {
-                        self.expect(TokenTag::RParen)?;
-                        Ok(ast::TypeAnnotation::Explicit(ast::TypeExpr::Unit))
-                    }
-                    TokenTag::Ident => {
-                        let i = self.expect_ident()?;
-                        let mut idents = vec![i];
-                        while let TokenTag::Comma = self.current_tag() {
-                            self.advance();
-                            idents.push(self.expect_ident()?);
-                        }
-                        self.expect(TokenTag::RParen)?;
-                        if self.check_and_advance(TokenTag::RArrow) {
-                            let TypeAnnotation::Explicit(return_type) = self.parse_option_type()?
-                            else {
-                                return Err(self.error(ParserErrorKind::ExpectedTypeAnnotation));
-                            };
-                            Ok(TypeAnnotation::Explicit(TypeExpr::Function {
-                                parameters: idents,
-                                return_type: Box::new(return_type),
-                            }))
-                        } else {
-                            Ok(TypeAnnotation::Explicit(TypeExpr::Tuple(idents)))
-                        }
-                    }
-                    other => Err(self.error(ParserErrorKind::ExpectedTokens {
-                        expected: vec![")".to_string(), "type".to_string()],
-                        found: other.to_string(),
-                    })),
+                if self.check_and_advance(TokenTag::RParen) {
+                    return Ok(TypeExpr::Unit);
+                }
+                let mut items = vec![self.parse_required_type()?];
+                while self.check_and_advance(TokenTag::Comma) {
+                    items.push(self.parse_required_type()?);
+                }
+                self.expect(TokenTag::RParen)?;
+                if self.check_and_advance(TokenTag::RArrow) {
+                    Ok(TypeExpr::Function {
+                        parameters: items,
+                        return_type: Box::new(self.parse_required_type()?),
+                    })
+                } else if items.len() == 1 {
+                    Ok(items.remove(0))
+                } else {
+                    Ok(TypeExpr::Tuple(items))
                 }
             }
             other => Err(self.error(ParserErrorKind::ExpectedTokens {
-                expected: vec!["=".to_string(), "type".to_string()],
-                found: format!("{other:?}"),
+                expected: vec!["type".to_string()],
+                found: other.to_string(),
             })),
         }
+    }
+
+    fn parse_match_expr(&mut self) -> Result<ast::Expr, Box<ParserError>> {
+        let start = self.current().span;
+        self.expect(TokenTag::Match)?;
+        let value = Box::new(self.parse_expr()?);
+        self.expect(TokenTag::In)?;
+        self.expect(TokenTag::NewLine)?;
+        self.consume_newlines();
+
+        let mut arms = Vec::new();
+        while !self.check(TokenTag::End) {
+            let arm_start = self.current().span;
+            let pattern = self.parse_pattern()?;
+            self.expect(TokenTag::FatArrow)?;
+            let body = self.parse_block()?;
+            let arm_end = body.span().end;
+            arms.push(ast::MatchArm {
+                pattern,
+                body,
+                span: Span {
+                    start: arm_start.start,
+                    end: arm_end,
+                },
+            });
+            self.expect(TokenTag::NewLine)?;
+            self.consume_newlines();
+        }
+        self.expect(TokenTag::End)?;
+        Ok(self.new_expr(start, ExprKind::Match { value, arms }))
+    }
+
+    fn parse_pattern(&mut self) -> Result<ast::Pattern, Box<ParserError>> {
+        let span = self.current().span;
+        if self.check(TokenTag::Ident) && self.current().origin == "_" {
+            self.advance();
+            return Ok(ast::Pattern::Wildcard { span });
+        }
+
+        let (qualifier, variant) = if self.check_and_advance(TokenTag::Dot) {
+            (None, self.expect_ident()?)
+        } else {
+            let mut path = vec![self.expect_ident()?];
+            while self.check_and_advance(TokenTag::ColonColon) {
+                path.push(self.expect_ident()?);
+            }
+            let variant = path.pop().expect("a pattern path has a final segment");
+            (Some(path), variant)
+        };
+
+        let binding = if self.check_and_advance(TokenTag::LParen) {
+            let binding = self.expect_ident()?;
+            self.expect(TokenTag::RParen)?;
+            Some(binding)
+        } else {
+            None
+        };
+        Ok(ast::Pattern::EnumVariant {
+            qualifier,
+            variant,
+            binding,
+            span,
+        })
     }
 
     fn parse_if_expr(&mut self) -> Result<ast::Expr, Box<ParserError>> {

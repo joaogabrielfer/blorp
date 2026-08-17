@@ -1,0 +1,16 @@
+import "modules/user_types.fob" as types
+
+fun main(): () =
+    let point: types::Point = types::Point(x = 5, y = 8)
+    let message := types::Message::Move(point = point)
+
+    match message in
+        types::Message::Move(payload) =>
+            echo(payload.point.x)
+        end
+
+        .Text(text) =>
+            echo(text)
+        end
+    end
+end
