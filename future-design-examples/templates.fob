@@ -1,0 +1,81 @@
+module ct = std::compile_time
+module fs = std::file_system
+
+macro render_template! (path: String) =
+    let src := fs::read_file(path).or_report!()
+
+    var code := false
+    var current := String()
+    var body := Arr<Syntax<Stmt>>()
+
+    for cursor in src.chars().cursor() do
+        match (cursor.current(), cursor.peek()) in
+            ('<', '?') =>
+                if code do
+                    ct::report_error(
+                        cursor.span(),
+                        "unexpected `<?` inside code block",
+                    )
+                end
+
+                body.push(template {
+                    s.append($current)
+                })
+
+                current.clear()
+                cursor.next()
+                code = true
+            end
+
+            ('?', '>') =>
+                if !code do
+                    ct::report_error(
+                        cursor.span(),
+                        "unexpected `?>` outside code block",
+                    )
+                end
+
+                let statements := ct::parse_statements(
+                        current,
+                        source = cursor.current_fragment_span(),
+                    )
+
+                body.append(statements)
+
+                current.clear()
+                cursor.next()
+                code = false
+            end
+
+            c => current.push(c)
+        end
+    end
+
+    if code do
+        ct::report_error(
+            ...,
+            "unterminated `<?` block",
+        )
+    end
+
+    if !current.empty?() do
+        body.push(template {
+            s.append($current)
+        })
+    end
+
+    template {
+		// macro hygiene should handle creating a block here
+		var s := String()
+
+		$..{body}
+
+		yield s
+    }
+end
+
+fun run() =
+    const page := render_template!("index.html.template")
+
+    println(page)
+end

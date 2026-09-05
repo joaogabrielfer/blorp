@@ -1,0 +1,24 @@
+fun main() =
+	let foo := "hello!!!"
+
+	// these are non mutating fns
+	foo.to_upper()
+		.slice(0, 4)
+		.(s -> s <> " world")
+	  	.inspect()
+
+	let bar := 1
+
+	let concat_with_foo_or_bar := bar.abs()
+		.(+ 1) // curried operators `(+1) == x -> x + 1`
+		.(do   // inferred lambdas (this is equal to `s -> if s...`)
+			if _ > 3 do return "foo" // `_` is a currying operator. this basically curries the function taking this as argument
+			else return "bar"
+			// this whole block would equate to piping in a curried function, like
+			// bar.(n -> if n > 3 "foo" else "bar") but with inferred parameter
+		end)
+		.(<> " baz") // also curried combine operator
+		.concat(_)   // and now transforms this whole expression into a function that takes an argument and concats it with the result of this
+
+	concat_with_foo_or_bar(" fobos") // "bar baz fobos"
+end

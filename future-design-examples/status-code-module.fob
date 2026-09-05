@@ -1,0 +1,41 @@
+module StatusCode =
+    type Self := private Self(Int)
+
+    Self::deriving! {
+        Debug,
+    }
+
+    const NotFound := Self(404)
+    const Ok := Self(200)
+
+    fun from(n: Int): Option<Self> in
+        404 = return Some(NotFound)
+        200 = return Some(Ok)
+        _ = return None
+    end
+
+    fun as_int(s: Self): Int =
+        return s.0
+    end
+end
+
+import StatusCode::{as_int}
+
+fun fetch_api(): StatusCode =
+    return StatusCode::Ok
+end
+
+fun main() =
+    let response := fetch_api()
+
+    match response in
+        as StatusCode::Ok => println("it was fine")
+        as StatusCode::NotFound => println("did not find it")
+        code => println("other response: $code")
+    end
+
+    let code_number := 404
+    let my_response := StatusCode::from(code_number).unwrap()
+
+    println(my_response.as_int())
+end

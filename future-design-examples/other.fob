@@ -1,0 +1,25 @@
+type Todo: struct =
+	name: String
+	status: enum =
+		Done
+		InProgress
+		NotStarted
+	end
+end
+
+fun print_remaining(todos: Arr<Todo>) =
+	todos
+		.filter(t -> t.status != .Done)
+		.for_each(t -> println("- ${todo.name}"))
+end
+
+fun main() =
+	let todos := [
+        Todo(name = "Learn Roc",       status = Done ),
+        Todo(name = "Buy groceries",   status = Done ),
+        Todo(name = "Write blog post", status = InProgress ),
+        Todo(name = "Call mom",        status = NotStarted ),
+	]
+
+	todos.print_remaining()
+end
